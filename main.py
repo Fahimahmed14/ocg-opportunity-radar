@@ -3,6 +3,7 @@ import requests
 
 
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
 
 def send_telegram(message):
@@ -11,7 +12,7 @@ def send_telegram(message):
     response = requests.post(
         url,
         data={
-            "chat_id": os.environ["TELEGRAM_CHAT_ID"],
+            "chat_id": CHAT_ID,
             "text": message
         },
         timeout=30
@@ -22,19 +23,31 @@ def send_telegram(message):
 
 message = """🌊 OCG Opportunity Radar
 
-Bot successfully connected!
+TEST SUCCESSFUL ✅
 
-Your daily opportunity radar is being built.
+Your Telegram connection is working.
 
-It will eventually search for:
+Next, we will build the opportunity-search engine.
+
+It will look for:
+• Oceanography
+• GIS / Remote Sensing
+• Climate & Environment
+• Research
 • Internships
-• Research opportunities
 • Competitions
 • Hackathons
 • Scholarships
 • Fellowships
-• Summer/Winter schools
-• GIS opportunities
+• Summer/Winter Schools
+• Remote opportunities
+
+Status: Connected successfully.
+"""
+
+send_telegram(message)
+
+print("Telegram message sent successfully!")• GIS opportunities
 • Oceanography opportunities
 • Climate opportunities
 • Remote opportunities

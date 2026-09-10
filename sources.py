@@ -1,235 +1,508 @@
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import quote, urlparse, parse_qs, unquote
+from urllib.parse import urljoin, urlparse
 import re
 
 
-SEARCH_QUERIES = [
-    "oceanography internship undergraduate students",
-    "marine science internship undergraduate",
-    "ocean science research internship students",
-    "marine biology internship undergraduate",
-    "GIS internship undergraduate students",
-    "remote sensing internship students",
-    "GIS remote sensing summer school students",
-    "climate change internship undergraduate",
-    "climate research internship students",
-    "environmental science internship undergraduate",
-    "environment research internship students",
-    "oceanography scholarship undergraduate international students",
-    "marine science scholarship international students",
-    "climate fellowship undergraduate students",
-    "environment fellowship students international",
-    "ocean science competition students",
-    "environment competition students 2026",
-    "climate hackathon students 2026",
-    "data science competition students 2026",
-    "ocean science student program 2026"
+# ============================================================
+# OFFICIAL / TRUSTED OPPORTUNITY SOURCES
+# ============================================================
+
+SOURCE_PAGES = [
+
+    {
+        "name": "NOAA Student Opportunities",
+        "url": "https://www.noaa.gov/education/opportunities/students"
+    },
+
+    {
+        "name": "NOAA Ocean Exploration Student Opportunities",
+        "url": "https://oceanexplorer.noaa.gov/careers/student-opportunities/"
+    },
+
+    {
+        "name": "NOAA Coastal Ocean Science Students",
+        "url": "https://coastalscience.noaa.gov/students/"
+    },
+
+    {
+        "name": "NOAA Coastal Ocean Science Internships",
+        "url": "https://coastalscience.noaa.gov/about/internships/"
+    },
+
+    {
+        "name": "NOAA Undergraduate Fellowships",
+        "url": "https://coast.noaa.gov/fellowship/undgrad_opportunities.html"
+    },
+
+    {
+        "name": "NOAA Fisheries Careers",
+        "url": "https://www.fisheries.noaa.gov/topic/careers-more"
+    },
+
+    {
+        "name": "NOAA AOML Student Opportunities",
+        "url": "https://www.aoml.noaa.gov/outreach-education/"
+    },
+
+    {
+        "name": "NOAA Weather Student Opportunities",
+        "url": "https://wpo.noaa.gov/student-opportunities/"
+    },
+
+    {
+        "name": "NOAA Climate Student Opportunities",
+        "url": "https://www.noaa.gov/education"
+    },
+
+    {
+        "name": "NASA Internships",
+        "url": "https://intern.nasa.gov/"
+    },
+
+    {
+        "name": "NASA STEM Gateway",
+        "url": "https://stemgateway.nasa.gov/"
+    },
+
+    {
+        "name": "NSF Research Experiences",
+        "url": "https://www.nsf.gov/crssprgm/reu/"
+    },
+
+    {
+        "name": "UCAR Undergraduate Opportunities",
+        "url": "https://www.ucar.edu/education-training"
+    }
 ]
 
 
-BLOCKED_DOMAINS = {
-    "google.com",
-    "googleusercontent.com",
-    "support.google.com",
-    "accounts.google.com",
-    "facebook.com",
-    "instagram.com",
-    "linkedin.com",
-    "youtube.com"
-}
-
-
-BLOCKED_URL_WORDS = {
-    "feedback",
-    "support.google",
-    "accounts.google",
-    "search?",
-    "/search",
-    "login",
-    "signin",
-    "signup",
-    "register",
-    "privacy",
-    "terms",
-    "preferences",
-    "settings"
-}
-
+# ============================================================
+# KEYWORDS
+# ============================================================
 
 OPPORTUNITY_KEYWORDS = [
+
     "internship",
     "intern",
     "research",
-    "researcher",
+    "research assistant",
+    "research experience",
     "scholarship",
     "fellowship",
-    "competition",
-    "contest",
-    "hackathon",
+    "studentship",
     "summer school",
     "summer program",
     "winter school",
     "winter program",
     "training",
     "workshop",
-    "externship",
-    "student program",
-    "student opportunity",
-    "grant",
+    "competition",
+    "contest",
     "challenge",
-    "academy",
-    "bootcamp",
-    "volunteer",
-    "career",
-    "young professional",
+    "hackathon",
+    "student opportunity",
+    "student program",
     "youth program",
-    "research assistant",
-    "studentship"
+    "undergraduate",
+    "graduate",
+    "fellow",
+    "scholar",
+    "application",
+    "apply"
 ]
 
 
-def clean_url(url):
+# ============================================================
+# HIGH-VALUE SUBJECT KEYWORDS
+# ============================================================
+
+FIELD_KEYWORDS = [
+
+    "ocean",
+    "oceanography",
+    "oceanographic",
+    "marine",
+    "coastal",
+    "fisheries",
+    "climate",
+    "climate change",
+    "earth science",
+    "environment",
+    "environmental",
+    "gis",
+    "geographic information",
+    "remote sensing",
+    "satellite",
+    "earth observation",
+    "data science",
+    "data analysis",
+    "python",
+    "matlab",
+    "r programming",
+    "modeling",
+    "modelling",
+    "weather",
+    "atmospheric",
+    "hydrology",
+    "disaster",
+    "risk",
+    "sustainability",
+    "conservation"
+]
+
+
+# ============================================================
+# BLOCKED DOMAINS / LINKS
+# ============================================================
+
+BLOCKED_DOMAINS = {
+
+    "facebook.com",
+    "instagram.com",
+    "linkedin.com",
+    "youtube.com",
+    "twitter.com",
+    "x.com",
+
+    "google.com",
+    "accounts.google.com",
+    "support.google.com",
+
+    "login.gov",
+    "accounts.nasa.gov"
+}
+
+
+BLOCKED_WORDS = {
+
+    "privacy",
+    "cookie",
+    "cookies",
+    "terms",
+    "accessibility",
+    "contact",
+    "feedback",
+    "subscribe",
+    "newsletter",
+    "login",
+    "signin",
+    "sign-in",
+    "register",
+    "account",
+    "sitemap",
+    "facebook",
+    "instagram",
+    "youtube",
+    "twitter"
+}
+
+
+# ============================================================
+# REQUEST SESSION
+# ============================================================
+
+SESSION = requests.Session()
+
+SESSION.headers.update({
+
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 "
+        "(KHTML, like Gecko) "
+        "Chrome/131.0 Safari/537.36"
+    )
+
+})
+
+
+# ============================================================
+# URL CHECK
+# ============================================================
+
+def is_valid_url(url):
+
     if not url:
-        return None
+        return False
 
-    url = unquote(url)
+    try:
 
-    # DuckDuckGo redirect URL
-    if "duckduckgo.com/l/" in url:
         parsed = urlparse(url)
-        params = parse_qs(parsed.query)
 
-        if "uddg" in params:
-            url = params["uddg"][0]
+        if parsed.scheme not in {
+            "http",
+            "https"
+        }:
+            return False
 
-    url = url.split("#")[0]
+        if not parsed.netloc:
+            return False
 
-    if not url.startswith(("http://", "https://")):
-        return None
+        domain = parsed.netloc.lower()
 
-    return url
+        if domain.startswith("www."):
+            domain = domain[4:]
 
+        for blocked in BLOCKED_DOMAINS:
 
-def is_bad_url(url):
-    if not url:
+            if (
+                domain == blocked
+                or domain.endswith(
+                    "." + blocked
+                )
+            ):
+                return False
+
         return True
 
-    lower_url = url.lower()
+    except Exception:
 
-    parsed = urlparse(lower_url)
-    domain = parsed.netloc.replace("www.", "")
-
-    # Block unwanted domains
-    for blocked_domain in BLOCKED_DOMAINS:
-        if (
-            domain == blocked_domain
-            or domain.endswith("." + blocked_domain)
-        ):
-            return True
-
-    # Block unwanted URL patterns
-    for blocked_word in BLOCKED_URL_WORDS:
-        if blocked_word in lower_url:
-            return True
-
-    return False
+        return False
 
 
-def looks_like_opportunity(title, snippet):
-    text = f"{title} {snippet}".lower()
+# ============================================================
+# TEXT CLEANING
+# ============================================================
 
+def clean_text(text):
+
+    if not text:
+        return ""
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        text
+    )
+
+    return text.strip()
+
+
+# ============================================================
+# CHECK OPPORTUNITY RELEVANCE
+# ============================================================
+
+def opportunity_score(title, text):
+
+    combined = (
+        f"{title} {text}"
+    ).lower()
+
+    score = 0
+
+    # Opportunity type
     for keyword in OPPORTUNITY_KEYWORDS:
-        if keyword in text:
-            return True
 
-    return False
+        if keyword in combined:
+            score += 2
+
+    # User's fields
+    for keyword in FIELD_KEYWORDS:
+
+        if keyword in combined:
+            score += 1
+
+    return score
 
 
-def normalize_title(title):
-    title = re.sub(r"\s+", " ", title)
-    return title.strip()
+# ============================================================
+# FETCH PAGE
+# ============================================================
 
+def fetch_page(url):
 
-def search_duckduckgo(query):
-    url = (
-        "https://html.duckduckgo.com/html/?q="
-        + quote(query)
-    )
+    try:
 
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 "
-            "(KHTML, like Gecko) "
-            "Chrome/131.0 Safari/537.36"
+        response = SESSION.get(
+            url,
+            timeout=30
         )
-    }
 
-    response = requests.get(
-        url,
-        headers=headers,
-        timeout=30
-    )
+        response.raise_for_status()
 
-    response.raise_for_status()
+        return response.text
+
+    except Exception as error:
+
+        print(
+            f"    Page failed: {error}"
+        )
+
+        return None
+
+
+# ============================================================
+# EXTRACT LINKS
+# ============================================================
+
+def extract_links(
+    html,
+    source
+):
 
     soup = BeautifulSoup(
-        response.text,
+        html,
         "html.parser"
     )
 
     results = []
 
-    for result in soup.select(".result"):
+    # --------------------------------------------------------
+    # First collect page title
+    # --------------------------------------------------------
 
-        link = result.select_one(".result__a")
-        snippet_element = result.select_one(
-            ".result__snippet"
-        )
+    page_title = ""
 
-        if not link:
-            continue
+    if soup.title:
 
-        title = normalize_title(
-            link.get_text(" ", strip=True)
-        )
-
-        href = link.get("href")
-
-        snippet = ""
-
-        if snippet_element:
-            snippet = snippet_element.get_text(
+        page_title = clean_text(
+            soup.title.get_text(
                 " ",
                 strip=True
             )
+        )
 
-        href = clean_url(href)
+    # --------------------------------------------------------
+    # Extract all links
+    # --------------------------------------------------------
 
-        if not href:
+    for link in soup.find_all(
+        "a",
+        href=True
+    ):
+
+        href = link.get(
+            "href"
+        )
+
+        title = clean_text(
+            link.get_text(
+                " ",
+                strip=True
+            )
+        )
+
+        if not title:
             continue
 
-        if is_bad_url(href):
-            continue
+        absolute_url = urljoin(
+            source["url"],
+            href
+        )
 
-        if not looks_like_opportunity(
-            title,
-            snippet
+        if not is_valid_url(
+            absolute_url
         ):
             continue
 
+        lower_title = title.lower()
+        lower_url = absolute_url.lower()
+
+        # ----------------------------------------------------
+        # Ignore obvious navigation links
+        # ----------------------------------------------------
+
+        blocked = False
+
+        for word in BLOCKED_WORDS:
+
+            if (
+                word in lower_title
+                and len(title) < 80
+            ):
+
+                blocked = True
+                break
+
+            if word in lower_url:
+
+                blocked = True
+                break
+
+        if blocked:
+            continue
+
+        # ----------------------------------------------------
+        # Calculate relevance
+        # ----------------------------------------------------
+
+        relevance = opportunity_score(
+            title,
+            page_title
+        )
+
+        # Also check URL
+        relevance += opportunity_score(
+            "",
+            lower_url
+        )
+
+        # ----------------------------------------------------
+        # Only keep potentially useful links
+        # ----------------------------------------------------
+
+        if relevance < 2:
+            continue
+
         results.append({
-            "source": "DuckDuckGo",
+
+            "source": source["name"],
+
             "title": title,
-            "url": href,
-            "snippet": snippet
+
+            "url": absolute_url,
+
+            "snippet": (
+                f"{title}. "
+                f"Found on {page_title}."
+            )
+
         })
 
     return results
 
 
+# ============================================================
+# EXTRACT OPPORTUNITIES FROM SOURCE PAGE
+# ============================================================
+
+def collect_from_source(source):
+
+    print(
+        f"\nSource: {source['name']}"
+    )
+
+    print(
+        f"URL: {source['url']}"
+    )
+
+    html = fetch_page(
+        source["url"]
+    )
+
+    if not html:
+
+        return []
+
+    results = extract_links(
+        html,
+        source
+    )
+
+    print(
+        f"    Candidates found: "
+        f"{len(results)}"
+    )
+
+    return results
+
+
+# ============================================================
+# DEDUPLICATION
+# ============================================================
+
 def deduplicate(results):
+
     unique = []
 
     seen_urls = set()
@@ -245,17 +518,20 @@ def deduplicate(results):
         title = item.get(
             "title",
             ""
-        ).strip().lower()
+        ).strip()
 
         if not url or not title:
             continue
 
-        normalized_url = url.rstrip("/").lower()
+        normalized_url = (
+            url.rstrip("/")
+            .lower()
+        )
 
         normalized_title = re.sub(
             r"[^a-z0-9]+",
             " ",
-            title
+            title.lower()
         ).strip()
 
         if normalized_url in seen_urls:
@@ -264,59 +540,165 @@ def deduplicate(results):
         if normalized_title in seen_titles:
             continue
 
-        seen_urls.add(normalized_url)
-        seen_titles.add(normalized_title)
+        seen_urls.add(
+            normalized_url
+        )
+
+        seen_titles.add(
+            normalized_title
+        )
 
         unique.append(item)
 
     return unique
 
 
+# ============================================================
+# FINAL KEYWORD FILTER
+# ============================================================
+
+def final_filter(results):
+
+    filtered = []
+
+    for item in results:
+
+        title = item.get(
+            "title",
+            ""
+        )
+
+        snippet = item.get(
+            "snippet",
+            ""
+        )
+
+        url = item.get(
+            "url",
+            ""
+        )
+
+        combined = (
+            f"{title} "
+            f"{snippet} "
+            f"{url}"
+        ).lower()
+
+        opportunity_match = any(
+            keyword in combined
+            for keyword in OPPORTUNITY_KEYWORDS
+        )
+
+        field_match = any(
+            keyword in combined
+            for keyword in FIELD_KEYWORDS
+        )
+
+        # We need at least one opportunity
+        # keyword AND preferably a field match.
+        #
+        # Some general student opportunities
+        # may not contain a field keyword,
+        # so those are allowed with stronger
+        # opportunity signals.
+
+        opportunity_count = sum(
+            keyword in combined
+            for keyword in OPPORTUNITY_KEYWORDS
+        )
+
+        if (
+            opportunity_match
+            and (
+                field_match
+                or opportunity_count >= 2
+            )
+        ):
+
+            filtered.append(item)
+
+    return filtered
+
+
+# ============================================================
+# MAIN COLLECTOR
+# ============================================================
+
 def collect_opportunities():
+
+    print(
+        "\n"
+        "=============================================="
+    )
+
+    print(
+        "🌊 COLLECTING OPPORTUNITIES"
+    )
+
+    print(
+        "=============================================="
+    )
 
     all_results = []
 
-    print(
-        f"Running {len(SEARCH_QUERIES)} "
-        "targeted searches..."
-    )
-
-    for index, query in enumerate(
-        SEARCH_QUERIES,
-        start=1
-    ):
-
-        print(
-            f"[{index}/{len(SEARCH_QUERIES)}] "
-            f"{query}"
-        )
+    for source in SOURCE_PAGES:
 
         try:
 
-            results = search_duckduckgo(
-                query
+            results = collect_from_source(
+                source
             )
 
-            print(
-                f"    Found {len(results)} "
-                "useful candidates"
+            all_results.extend(
+                results
             )
-
-            all_results.extend(results)
 
         except Exception as error:
 
             print(
-                f"    Search failed: {error}"
+                f"    Source error: {error}"
             )
+
+    print(
+        "\nRaw candidates: "
+        f"{len(all_results)}"
+    )
+
+    # --------------------------------------------------------
+    # Deduplicate
+    # --------------------------------------------------------
 
     unique_results = deduplicate(
         all_results
     )
 
     print(
-        f"Total candidates after cleaning: "
+        "After deduplication: "
         f"{len(unique_results)}"
     )
 
-    return unique_results
+    # --------------------------------------------------------
+    # Final filter
+    # --------------------------------------------------------
+
+    filtered_results = final_filter(
+        unique_results
+    )
+
+    print(
+        "After keyword filtering: "
+        f"{len(filtered_results)}"
+    )
+
+    # --------------------------------------------------------
+    # Limit collector output
+    # --------------------------------------------------------
+
+    filtered_results = filtered_results[:80]
+
+    print(
+        "Sending to AI: "
+        f"{len(filtered_results)}"
+    )
+
+    return filtered_results

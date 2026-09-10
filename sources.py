@@ -90,16 +90,12 @@ OPPORTUNITY_KEYWORDS = [
 
 
 def clean_url(url):
-    """
-    Clean search-engine redirect URLs and return the real URL.
-    """
-
     if not url:
         return None
 
     url = unquote(url)
 
-    # DuckDuckGo redirect
+    # DuckDuckGo redirect URL
     if "duckduckgo.com/l/" in url:
         parsed = urlparse(url)
         params = parse_qs(parsed.query)
@@ -107,7 +103,6 @@ def clean_url(url):
         if "uddg" in params:
             url = params["uddg"][0]
 
-    # Remove fragments
     url = url.split("#")[0]
 
     if not url.startswith(("http://", "https://")):
@@ -117,10 +112,6 @@ def clean_url(url):
 
 
 def is_bad_url(url):
-    """
-    Reject search-engine, login, support and other useless pages.
-    """
-
     if not url:
         return True
 
@@ -131,7 +122,10 @@ def is_bad_url(url):
 
     # Block unwanted domains
     for blocked_domain in BLOCKED_DOMAINS:
-        if domain == blocked_domain or domain.endswith("." + blocked_domain):
+        if (
+            domain == blocked_domain
+            or domain.endswith("." + blocked_domain)
+        ):
             return True
 
     # Block unwanted URL patterns
@@ -143,10 +137,6 @@ def is_bad_url(url):
 
 
 def looks_like_opportunity(title, snippet):
-    """
-    Fast keyword filter before sending candidates to AI.
-    """
-
     text = f"{title} {snippet}".lower()
 
     for keyword in OPPORTUNITY_KEYWORDS:
@@ -162,10 +152,6 @@ def normalize_title(title):
 
 
 def search_duckduckgo(query):
-    """
-    Search DuckDuckGo HTML results.
-    """
-
     url = (
         "https://html.duckduckgo.com/html/?q="
         + quote(query)
@@ -196,8 +182,11 @@ def search_duckduckgo(query):
     results = []
 
     for result in soup.select(".result"):
+
         link = result.select_one(".result__a")
-        snippet_element = result.select_one(".result__snippet")
+        snippet_element = result.select_one(
+            ".result__snippet"
+        )
 
         if not link:
             continue
@@ -224,7 +213,10 @@ def search_duckduckgo(query):
         if is_bad_url(href):
             continue
 
-        if not looks_like_opportunity(title, snippet):
+        if not looks_like_opportunity(
+            title,
+            snippet
+        ):
             continue
 
         results.append({
@@ -238,26 +230,28 @@ def search_duckduckgo(query):
 
 
 def deduplicate(results):
-    """
-    Remove duplicate URLs and duplicate titles.
-    """
-
     unique = []
+
     seen_urls = set()
     seen_titles = set()
 
     for item in results:
 
-        url = item.get("url", "").strip()
-        title = item.get("title", "").strip().lower()
+        url = item.get(
+            "url",
+            ""
+        ).strip()
+
+        title = item.get(
+            "title",
+            ""
+        ).strip().lower()
 
         if not url or not title:
             continue
 
-        # Normalize URL
         normalized_url = url.rstrip("/").lower()
 
-        # Normalize title
         normalized_title = re.sub(
             r"[^a-z0-9]+",
             " ",
@@ -279,19 +273,12 @@ def deduplicate(results):
 
 
 def collect_opportunities():
-    """
-    Main collector.
-
-    Searches many opportunity-related queries,
-    removes bad results,
-    filters obvious non-opportunities,
-    and removes duplicates.
-    """
 
     all_results = []
 
     print(
-        f"Running {len(SEARCH_QUERIES)} targeted searches..."
+        f"Running {len(SEARCH_QUERIES)} "
+        "targeted searches..."
     )
 
     for index, query in enumerate(
@@ -300,15 +287,19 @@ def collect_opportunities():
     ):
 
         print(
-            f"[{index}/{len(SEARCH_QUERIES)}] {query}"
+            f"[{index}/{len(SEARCH_QUERIES)}] "
+            f"{query}"
         )
 
         try:
 
-            results = search_duckduckgo(query)
+            results = search_duckduckgo(
+                query
+            )
 
             print(
-                f"    Found {len(results)} useful candidates"
+                f"    Found {len(results)} "
+                "useful candidates"
             )
 
             all_results.extend(results)
@@ -319,7 +310,9 @@ def collect_opportunities():
                 f"    Search failed: {error}"
             )
 
-    unique_results = deduplicate(all_results)
+    unique_results = deduplicate(
+        all_results
+    )
 
     print(
         f"Total candidates after cleaning: "

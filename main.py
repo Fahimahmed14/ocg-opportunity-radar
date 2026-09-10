@@ -24,12 +24,10 @@ def send_telegram(message):
 
     response = requests.post(
         url,
-
         data={
             "chat_id": CHAT_ID,
             "text": message
         },
-
         timeout=30
     )
 
@@ -45,7 +43,6 @@ def split_message(
         return [message]
 
     parts = []
-
     current = ""
 
     for line in message.split("\n"):
@@ -64,7 +61,10 @@ def split_message(
 
         else:
 
-            current += "\n" + line
+            if current:
+                current += "\n"
+
+            current += line
 
     if current:
         parts.append(current)
@@ -77,16 +77,20 @@ def build_report(
     profile
 ):
 
-    top_results = [
-        result
-        for result in results
-        if result.get(
+    # --------------------------------------------------------
+    # Keep anything with an AI score
+    # --------------------------------------------------------
+
+    results = sorted(
+        results,
+        key=lambda x: x.get(
             "score",
             0
-        ) >= 60
-    ]
+        ),
+        reverse=True
+    )
 
-    top_results = top_results[:10]
+    top_results = results[:10]
 
     message = (
         "🌊 OCG OPPORTUNITY RADAR\n\n"
@@ -96,14 +100,10 @@ def build_report(
     if not top_results:
 
         message += (
-            "No strong opportunities "
-            "found today.\n\n"
-
-            "The radar searched multiple "
-            "opportunity categories and "
-            "filtered the results using AI.\n\n"
-
-            "Try again tomorrow."
+            "No opportunities reached the "
+            "AI ranking stage.\n\n"
+            "The collector may have returned "
+            "zero usable candidates."
         )
 
         return message
@@ -160,16 +160,10 @@ def build_report(
 
     message += (
         "──────────────────\n"
-
-        f"🔎 Candidates collected: "
-        f"{len(results)}\n"
-
-        f"🔥 Strong matches: "
-        f"{len(top_results)}\n\n"
-
+        f"🔎 AI-ranked candidates: "
+        f"{len(results)}\n\n"
         "🎓 Profile: "
         f"{profile['education']['degree']}\n"
-
         "🌍 Bangladesh"
     )
 
@@ -179,14 +173,16 @@ def build_report(
 def main():
 
     print("=" * 60)
+
     print(
         "🌊 OCG OPPORTUNITY RADAR"
     )
+
     print("=" * 60)
 
-    # ------------------------------------------
+    # --------------------------------------------------------
     # LOAD PROFILE
-    # ------------------------------------------
+    # --------------------------------------------------------
 
     with open(
         "profile.json",
@@ -200,9 +196,9 @@ def main():
         "\n1. Profile loaded."
     )
 
-    # ------------------------------------------
-    # COLLECT OPPORTUNITIES
-    # ------------------------------------------
+    # --------------------------------------------------------
+    # COLLECT
+    # --------------------------------------------------------
 
     print(
         "\n2. Collecting opportunities..."
@@ -213,22 +209,60 @@ def main():
     )
 
     print(
-        f"\nCollected "
-        f"{len(opportunities)} "
-        "clean candidates."
+        "\n=============================================="
     )
+
+    print(
+        f"COLLECTOR RESULT: "
+        f"{len(opportunities)} candidates"
+    )
+
+    print(
+        "=============================================="
+    )
+
+    # --------------------------------------------------------
+    # IMPORTANT DEBUG
+    # --------------------------------------------------------
+
+    if opportunities:
+
+        print(
+            "\nFIRST COLLECTED CANDIDATES:"
+        )
+
+        for index, opportunity in enumerate(
+            opportunities[:10],
+            start=1
+        ):
+
+            print(
+                f"\n{index}. "
+                f"{opportunity.get('title', '')}"
+            )
+
+            print(
+                f"   URL: "
+                f"{opportunity.get('url', '')}"
+            )
+
+            print(
+                f"   Source: "
+                f"{opportunity.get('source', '')}"
+            )
+
+    # --------------------------------------------------------
+    # NO CANDIDATES
+    # --------------------------------------------------------
 
     if not opportunities:
 
         message = (
             "🌊 OCG OPPORTUNITY RADAR\n\n"
-
-            "⚠️ No candidates were "
-            "collected today.\n\n"
-
-            "The search collector may have "
-            "encountered a temporary "
-            "search-engine problem."
+            "⚠️ COLLECTOR RETURNED 0 CANDIDATES\n\n"
+            "The opportunity websites/search "
+            "sources returned no usable results.\n\n"
+            "AI filtering was NOT run."
         )
 
         send_telegram(
@@ -237,23 +271,21 @@ def main():
 
         return
 
-    # ------------------------------------------
+    # --------------------------------------------------------
     # LIMIT AI CANDIDATES
-    # ------------------------------------------
+    # --------------------------------------------------------
 
-    ai_candidates = (
-        opportunities[:40]
-    )
+    ai_candidates = opportunities[:40]
 
     print(
-        f"Sending "
+        f"\n3. Sending "
         f"{len(ai_candidates)} "
         "candidates to OpenRouter AI..."
     )
 
-    # ------------------------------------------
+    # --------------------------------------------------------
     # AI RANKING
-    # ------------------------------------------
+    # --------------------------------------------------------
 
     all_rankings = []
 
@@ -274,7 +306,7 @@ def main():
         )
 
         print(
-            f"AI batch "
+            f"\nAI batch "
             f"{batch_number}: "
             f"{len(batch)} opportunities"
         )
@@ -288,8 +320,10 @@ def main():
                 )
             )
 
-            # Convert local indexes
-            # to global indexes
+            print(
+                f"AI returned "
+                f"{len(rankings)} rankings."
+            )
 
             for ranking in rankings:
 
@@ -338,15 +372,14 @@ def main():
                 f"{error}"
             )
 
-    print(
-        f"\nAI returned "
-        f"{len(all_rankings)} "
-        "rankings."
-    )
-
-    # ------------------------------------------
+    # --------------------------------------------------------
     # APPLY AI RANKINGS
-    # ------------------------------------------
+    # --------------------------------------------------------
+
+    print(
+        f"\n4. Total AI rankings: "
+        f"{len(all_rankings)}"
+    )
 
     ranked_results = (
         apply_rankings(
@@ -355,35 +388,37 @@ def main():
         )
     )
 
-    strong_results = [
-        result
-        for result in ranked_results
-        if result.get(
-            "score",
-            0
-        ) >= 60
-    ]
-
     print(
-        f"Strong opportunities: "
-        f"{len(strong_results)}"
+        f"5. Final ranked results: "
+        f"{len(ranked_results)}"
     )
 
-    # ------------------------------------------
-    # BUILD REPORT
-    # ------------------------------------------
+    # --------------------------------------------------------
+    # PRINT SCORES
+    # --------------------------------------------------------
+
+    print(
+        "\nAI SCORES:"
+    )
+
+    for result in ranked_results[:20]:
+
+        print(
+            f"{result.get('score', 0)}/100 - "
+            f"{result.get('title', '')}"
+        )
+
+    # --------------------------------------------------------
+    # REPORT
+    # --------------------------------------------------------
 
     report = build_report(
         ranked_results,
         profile
     )
 
-    # ------------------------------------------
-    # SEND TELEGRAM
-    # ------------------------------------------
-
     print(
-        "\nSending Telegram report..."
+        "\n6. Sending Telegram report..."
     )
 
     messages = split_message(
@@ -407,4 +442,5 @@ def main():
 
 
 if __name__ == "__main__":
+
     main()

@@ -1,0 +1,74 @@
+{
+  "education": {
+    "level": "Undergraduate",
+    "degree": "B.Sc. (Hons) Oceanography",
+    "country": "Bangladesh"
+  },
+
+  "interests": [
+    "Oceanography",
+    "Marine Science",
+    "Ocean Science",
+    "GIS",
+    "Remote Sensing",
+    "Ocean Modelling",
+    "Climate Change",
+    "Environmental Science",
+    "Disaster Risk Reduction",
+    "Data Science",
+    "Python",
+    "R",
+    "MATLAB"
+  ],
+
+  "skills": [
+    "ArcGIS",
+    "GIS",
+    "Remote Sensing",
+    "Spatial Analysis",
+    "Python",
+    "R",
+    "MATLAB",
+    "Ocean Data View",
+    "Data Analysis",
+    "Scientific Research"
+  ],
+
+  "opportunity_types": [
+    "Internship",
+    "Research Internship",
+    "Research Assistant",
+    "Competition",
+    "Hackathon",
+    "Scholarship",
+    "Fellowship",
+    "Summer School",
+    "Winter School",
+    "Externship",
+    "Youth Program",
+    "Training",
+    "Conference",
+    "Remote Opportunity",
+    "Student Program"
+  ],
+
+  "locations": [
+    "Bangladesh",
+    "Remote",
+    "Asia",
+    "Europe",
+    "North America",
+    "Global"
+  ],
+
+  "priority": [
+    "Oceanography",
+    "Marine Science",
+    "GIS",
+    "Remote Sensing",
+    "Climate",
+    "Environment",
+    "Research",
+    "Data Science"
+  ]
+}

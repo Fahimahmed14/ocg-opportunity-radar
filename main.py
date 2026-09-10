@@ -3,6 +3,7 @@ import json
 import requests
 
 from sources import collect_opportunities
+from ai_filter import rank_opportunity
 
 
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
@@ -28,36 +29,66 @@ with open("profile.json", "r", encoding="utf-8") as file:
     profile = json.load(file)
 
 
-print("Starting opportunity search...")
+print("Searching for opportunities...")
 
 opportunities = collect_opportunities()
 
-print(f"Collected {len(opportunities)} results.")
+print(f"Found {len(opportunities)} candidate results.")
 
 
-message = f"""🌊 OCG OPPORTUNITY RADAR
+ranked = []
 
-🔎 Search completed
+for opportunity in opportunities[:20]:
 
-Potential results found: {len(opportunities)}
+    try:
+        result = rank_opportunity(opportunity, profile)
 
-Your profile:
-🎓 {profile["education"]["degree"]}
-🌍 {profile["education"]["country"]}
+        opportunity["score"] = result["score"]
+        opportunity["category"] = result["category"]
+        opportunity["eligibility"] = result["eligibility"]
+        opportunity["reason"] = result["reason"]
+        opportunity["priority"] = result["priority"]
 
-Main interests:
-• Oceanography
-• GIS
-• Remote Sensing
-• Climate
-• Environment
-• Research
-• Data Science
+        ranked.append(opportunity)
 
-🤖 AI filtering will be added next.
-"""
+        print(
+            opportunity["score"],
+            opportunity["title"]
+        )
+
+    except Exception as error:
+        print("AI filtering failed:", error)
+
+
+ranked.sort(
+    key=lambda x: x.get("score", 0),
+    reverse=True
+)
+
+
+top = ranked[:5]
+
+
+message = "🌊 OCG OPPORTUNITY RADAR\n\n"
+
+if not top:
+    message += "No suitable opportunities found today."
+else:
+
+    message += "🔥 TOP OPPORTUNITIES\n\n"
+
+    for i, opportunity in enumerate(top, 1):
+
+        message += (
+            f"{i}. {opportunity['title'][:100]}\n"
+            f"⭐ Match: {opportunity['score']}/100\n"
+            f"📂 {opportunity['category']}\n"
+            f"🎯 {opportunity['priority']}\n"
+            f"📝 {opportunity['reason'][:200]}\n"
+            f"🔗 {opportunity['url']}\n\n"
+        )
 
 
 send_telegram(message)
 
-print("Telegram report sent!")
+print("AI opportunity report sent!")

@@ -16,10 +16,20 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install requests
-        run: pip install requests
+      - name: Install dependencies
+        run: |
+          python --version
+          pip install requests beautifulsoup4
+
+      - name: Check files
+        run: |
+          echo "Files in repository:"
+          ls -la
+          echo "Python files:"
+          find . -maxdepth 2 -type f -name "*.py"
 
       - name: Run bot
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-        run: python main.py
+        run: |
+          python main.py

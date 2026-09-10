@@ -18,18 +18,15 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python --version
           pip install requests beautifulsoup4
 
       - name: Check files
         run: |
-          echo "Files in repository:"
+          echo "Repository files:"
           ls -la
-          echo "Python files:"
-          find . -maxdepth 2 -type f -name "*.py"
 
-      - name: Run bot
+      - name: Run AI Opportunity Radar
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-        run: |
-          python main.py
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: python main.py

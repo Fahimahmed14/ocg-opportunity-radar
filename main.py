@@ -1,8 +1,15 @@
 import os
 import requests
 
-TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHAT_ID = "6289716583"
+
+if not TOKEN:
+    print("ERROR: TELEGRAM_BOT_TOKEN is missing from GitHub Secrets.")
+    raise SystemExit(1)
+
+print("Telegram token found.")
+print("Chat ID:", CHAT_ID)
 
 url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
 
@@ -10,12 +17,16 @@ message = """🌊 OCG Opportunity Radar
 
 TEST SUCCESSFUL ✅
 
-Telegram connection is working!
+Your Telegram bot is connected.
 
-Next, we will build the AI opportunity finder for:
+Next step:
+AI Opportunity Finder 🚀
+
+It will search for:
 • Oceanography
-• GIS & Remote Sensing
-• Climate & Environment
+• GIS / Remote Sensing
+• Climate
+• Environment
 • Research
 • Internships
 • Competitions
@@ -24,40 +35,25 @@ Next, we will build the AI opportunity finder for:
 • Fellowships
 • Summer/Winter Schools
 • Remote opportunities
-
-Status: Connected successfully.
 """
 
-response = requests.post(
-    url,
-    data={
-        "chat_id": CHAT_ID,
-        "text": message
-    },
-    timeout=30
-)
+try:
+    response = requests.post(
+        url,
+        data={
+            "chat_id": CHAT_ID,
+            "text": message
+        },
+        timeout=30
+    )
 
-response.raise_for_status()
+    print("Telegram API status:", response.status_code)
+    print("Telegram API response:", response.text)
 
-print("Telegram message sent successfully!")• Internships
-• Competitions
-• Hackathons
-• Scholarships
-• Fellowships
-• Summer/Winter Schools
-• Remote opportunities
+    response.raise_for_status()
 
-Status: Connected successfully.
-"""
+    print("SUCCESS: Telegram message sent!")
 
-send_telegram(message)
-
-print("Telegram message sent successfully!")• GIS opportunities
-• Oceanography opportunities
-• Climate opportunities
-• Remote opportunities
-
-Status: Telegram connection test successful ✅
-"""
-
-send_telegram(message)
+except Exception as e:
+    print("ERROR:", str(e))
+    raise

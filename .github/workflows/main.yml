@@ -1,14 +1,15 @@
-name: Telegram Test
+name: OCG Opportunity Radar
 
 on:
   workflow_dispatch:
 
 jobs:
-  test:
+  radar:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup Python
@@ -18,15 +19,11 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install requests beautifulsoup4
+          pip install -r requirements.txt
 
-      - name: Check files
-        run: |
-          echo "Repository files:"
-          ls -la
-
-      - name: Run AI Opportunity Radar
+      - name: Run OCG Opportunity Radar
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-        run: python main.py
+        run: |
+          python main.py

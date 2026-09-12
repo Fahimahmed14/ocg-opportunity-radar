@@ -1,1016 +1,1138 @@
-import requests
-from bs4 import BeautifulSoup
-from urllib.parse import quote, urlparse
-import xml.etree.ElementTree as ET
 import re
+import time
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import urljoin, urlparse
 
+import requests
+from bs4 import BeautifulSoup
 from googlenewsdecoder import gnewsdecoder
 
 
-CURRENT_YEAR = datetime.now().year
-
 # ============================================================
-# SEARCH QUERIES
+# OCG OPPORTUNITY RADAR - SOURCES V4
 # ============================================================
 
-SEARCH_QUERIES = [
-    "oceanography internship undergraduate 2026",
-    "marine science internship undergraduate 2026",
-    "ocean research internship 2026",
-    "oceanography summer school 2026",
-    "marine science summer school 2026",
+CURRENT_YEAR = 2026
+NEXT_YEAR = 2027
 
-    "GIS internship undergraduate 2026",
-    "GIS summer school 2026",
-    "remote sensing internship students 2026",
-    "earth observation internship 2026",
+SEARCH_WORKERS = 8
+VERIFY_WORKERS = 8
 
-    "climate change internship undergraduate 2026",
-    "climate research internship 2026",
-    "climate fellowship students 2026",
-    "climate summer school 2026",
+MAX_RESULTS_PER_QUERY = 8
+MAX_VERIFY_CANDIDATES = 45
+MAX_AI_CANDIDATES = 25
 
-    "environmental science internship 2026",
-    "environment research internship 2026",
+REQUEST_TIMEOUT = 8
 
-    "data science internship undergraduate 2026",
-    "data science competition students 2026",
-
-    "undergraduate research international students 2026",
-    "student scholarship international students 2026",
-    "student fellowship international students 2026",
-
-    "student competition 2026",
-    "student hackathon 2026",
-    "youth climate program 2026"
-]
-
-
-GOOGLE_NEWS_RSS = (
-    "https://news.google.com/rss/search?"
-    "q={query}"
-    "&hl=en-US"
-    "&gl=US"
-    "&ceid=US:en"
-)
-
-
-# ============================================================
-# KEYWORDS
-# ============================================================
-
-OPPORTUNITY_KEYWORDS = [
-    "internship",
-    "intern",
-    "research internship",
-    "research opportunity",
-    "research program",
-    "research assistant",
-    "research experience",
-    "scholarship",
-    "fellowship",
-    "studentship",
-    "summer school",
-    "summer program",
-    "winter school",
-    "winter program",
-    "training",
-    "workshop",
-    "competition",
-    "contest",
-    "hackathon",
-    "challenge",
-    "student program",
-    "student opportunity",
-    "youth program",
-    "call for applications",
-    "applications open",
-    "apply now",
-    "apply"
-]
-
-
-FIELD_KEYWORDS = [
-    "ocean",
-    "oceanography",
-    "marine",
-    "coastal",
-    "fisheries",
-    "climate",
-    "environment",
-    "environmental",
-    "gis",
-    "geospatial",
-    "remote sensing",
-    "earth observation",
-    "satellite",
-    "data science",
-    "data analysis",
-    "python",
-    "matlab",
-    "r programming",
-    "modeling",
-    "modelling",
-    "weather",
-    "atmospheric",
-    "hydrology",
-    "disaster",
-    "risk",
-    "sustainability",
-    "conservation"
-]
-
-
-# ============================================================
-# BLOCKED DOMAINS
-# ============================================================
-
-BLOCKED_DOMAINS = {
-    "facebook.com",
-    "instagram.com",
-    "linkedin.com",
-    "youtube.com",
-    "twitter.com",
-    "x.com",
-    "news.google.com",
-    "google.com"
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/139.0 Safari/537.36"
+    )
 }
 
 
 # ============================================================
-# SESSION
+# HIGH-VALUE SEARCH QUERIES
 # ============================================================
 
-SESSION = requests.Session()
+SEARCH_QUERIES = [
+    # Oceanography / Marine Science
+    '"oceanography" internship 2026 applications',
+    '"marine science" internship 2026 undergraduate',
+    '"ocean science" internship 2026 students',
+    '"marine research" internship 2026 students',
+    '"oceanography" "summer school" 2026 2027',
+    '"marine science" "summer school" 2026 2027',
 
-SESSION.headers.update({
-    "User-Agent":
-        "Mozilla/5.0 "
-        "(Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 "
-        "Chrome/131.0 Safari/537.36"
-})
+    # GIS / Remote Sensing
+    '"GIS" internship 2026 students',
+    '"remote sensing" internship 2026 students',
+    '"GIS" research internship 2026 undergraduate',
+    '"Earth observation" internship 2026 students',
+
+    # Climate / Environment
+    '"climate" internship 2026 undergraduate',
+    '"environmental science" internship 2026 students',
+    '"climate change" fellowship 2026 students',
+    '"environment" research internship 2026',
+
+    # Research / Data Science
+    '"undergraduate research" ocean 2026',
+    '"research internship" environmental science 2026',
+    '"data science" research internship 2026 students',
+
+    # Scholarships / Fellowships
+    '"ocean" scholarship 2026 undergraduate',
+    '"marine science" fellowship 2026 students',
+    '"climate" fellowship 2026 undergraduate',
+
+    # Competitions / Hackathons
+    '"ocean" competition 2026 students',
+    '"ocean" hackathon 2026',
+    '"climate" hackathon 2026 students',
+    '"GIS" competition 2026 students',
+
+    # Youth / International
+    '"climate" youth program 2026 applications',
+    '"environment" youth program 2026 applications',
+    '"ocean" youth program 2026 applications',
+
+    # Bangladesh / Asia
+    '"Bangladesh" oceanography internship 2026',
+    '"Bangladesh" climate fellowship 2026 students',
+    '"Asia" marine science internship 2026',
+]
 
 
 # ============================================================
-# TEXT CLEANING
+# DOMAIN QUALITY
+# ============================================================
+
+HIGH_VALUE_DOMAINS = [
+    ".edu",
+    ".ac.uk",
+    ".ac.jp",
+    ".ac.in",
+    ".edu.au",
+    ".gov",
+    ".gov.uk",
+    ".int",
+    ".org",
+]
+
+OFFICIAL_DOMAIN_KEYWORDS = [
+    "nasa.gov",
+    "noaa.gov",
+    "usgs.gov",
+    "esa.int",
+    "copernicus.eu",
+    "europa.eu",
+    "un.org",
+    "unesco.org",
+    "fao.org",
+    "wmo.int",
+    "worldbank.org",
+    "undp.org",
+    "ipcc.ch",
+    "iucn.org",
+    "mit.edu",
+    "harvard.edu",
+    "stanford.edu",
+    "ox.ac.uk",
+    "cam.ac.uk",
+    "ed.ac.uk",
+    "soton.ac.uk",
+    "uw.edu",
+    "whoi.edu",
+    "sc.edu",
+    "umich.edu",
+]
+
+
+LOW_VALUE_DOMAINS = [
+    "facebook.com",
+    "instagram.com",
+    "youtube.com",
+    "twitter.com",
+    "x.com",
+    "linkedin.com",
+    "reddit.com",
+    "pinterest.com",
+    "tiktok.com",
+]
+
+
+AGGREGATOR_DOMAINS = [
+    "globalsouthopportunities.com",
+    "opportunitydesk.org",
+    "scholarshiproar.com",
+    "scholarshipregion.com",
+    "scholars4dev.com",
+    "youthop.com",
+    "opportunitiescorners.info",
+]
+
+
+# ============================================================
+# BASIC HELPERS
 # ============================================================
 
 def clean_text(text):
-
     if not text:
         return ""
 
-    text = BeautifulSoup(
-        text,
-        "html.parser"
-    ).get_text(
-        " ",
-        strip=True
-    )
-
-    text = re.sub(
-        r"\s+",
-        " ",
-        text
-    )
-
-    return text.strip()
+    return re.sub(r"\s+", " ", text).strip()
 
 
-# ============================================================
-# URL VALIDATION
-# ============================================================
-
-def valid_url(url):
-
+def normalize_url(url):
     if not url:
-        return False
+        return ""
 
+    url = url.strip()
+
+    if url.startswith("//"):
+        url = "https:" + url
+
+    if not url.startswith(("http://", "https://")):
+        return ""
+
+    return url.split("#")[0]
+
+
+def get_domain(url):
     try:
-
-        parsed = urlparse(url)
-
-        if parsed.scheme not in (
-            "http",
-            "https"
-        ):
-            return False
-
-        if not parsed.netloc:
-            return False
-
-        domain = parsed.netloc.lower()
-
-        if domain.startswith("www."):
-            domain = domain[4:]
-
-        for blocked in BLOCKED_DOMAINS:
-
-            if (
-                domain == blocked
-                or domain.endswith(
-                    "." + blocked
-                )
-            ):
-
-                return False
-
-        return True
-
+        return urlparse(url).netloc.lower().replace("www.", "")
     except Exception:
+        return ""
 
-        return False
-
-
-# ============================================================
-# GOOGLE NEWS URL CHECK
-# ============================================================
 
 def is_google_news_url(url):
+    if not url:
+        return True
+
+    domain = get_domain(url)
+
+    return (
+        "news.google.com" in domain
+        or "google.com" == domain
+    )
+
+
+def is_social_url(url):
+    domain = get_domain(url)
+
+    return any(
+        bad in domain
+        for bad in LOW_VALUE_DOMAINS
+    )
+
+
+def is_aggregator(url):
+    domain = get_domain(url)
+
+    return any(
+        domain == d or domain.endswith("." + d)
+        for d in AGGREGATOR_DOMAINS
+    )
+
+
+def domain_quality(url):
+    domain = get_domain(url)
+
+    if not domain:
+        return 0
+
+    if is_social_url(url):
+        return 0
+
+    score = 0
+
+    if any(domain.endswith(x) for x in HIGH_VALUE_DOMAINS):
+        score += 25
+
+    if any(x in domain for x in OFFICIAL_DOMAIN_KEYWORDS):
+        score += 40
+
+    if is_aggregator(url):
+        score += 5
+
+    if domain.endswith(".org"):
+        score += 10
+
+    if domain.endswith(".edu"):
+        score += 30
+
+    return min(score, 70)
+
+
+# ============================================================
+# GOOGLE NEWS DECODER
+# ============================================================
+
+def decode_google_news_url(url):
+    """
+    Convert Google News RSS redirect URL into publisher URL.
+    """
 
     if not url:
-        return False
+        return ""
+
+    if not is_google_news_url(url):
+        return normalize_url(url)
 
     try:
+        result = gnewsdecoder(url)
 
-        domain = urlparse(
-            url
-        ).netloc.lower()
+        if isinstance(result, dict):
+            decoded = result.get("decoded_url")
 
-        return (
-            domain == "news.google.com"
-            or domain.endswith(
-                ".news.google.com"
-            )
-        )
+            if decoded:
+                decoded = normalize_url(decoded)
+
+                if decoded and not is_google_news_url(decoded):
+                    return decoded
 
     except Exception:
+        pass
 
-        return False
-
-
-# ============================================================
-# OLD YEAR DETECTION
-# ============================================================
-
-def contains_old_year(text):
-
-    if not text:
-        return False
-
-    years = re.findall(
-        r"\b(20\d{2})\b",
-        text
-    )
-
-    for year in years:
-
-        year = int(year)
-
-        # Reject opportunities clearly older
-        # than the previous cycle.
-
-        if year < CURRENT_YEAR - 1:
-
-            return True
-
-    return False
+    return ""
 
 
 # ============================================================
-# RELEVANCE
+# GOOGLE NEWS SEARCH
 # ============================================================
 
-def is_relevant(
-    title,
-    description
-):
+def search_google_news(query):
+    """
+    Search Google News RSS for one query.
+    """
 
-    text = (
-        f"{title} "
-        f"{description}"
-    ).lower()
-
-    opportunity_hits = sum(
-        keyword in text
-        for keyword in OPPORTUNITY_KEYWORDS
-    )
-
-    field_hits = sum(
-        keyword in text
-        for keyword in FIELD_KEYWORDS
-    )
-
-    if (
-        opportunity_hits >= 2
-    ):
-
-        return True
-
-    if (
-        opportunity_hits >= 1
-        and field_hits >= 1
-    ):
-
-        return True
-
-    return False
-
-
-# ============================================================
-# DECODE GOOGLE NEWS URL
-# ============================================================
-
-def decode_google_news_url(
-    google_url
-):
-
-    if not is_google_news_url(
-        google_url
-    ):
-
-        return google_url
-
-    try:
-
-        result = gnewsdecoder(
-            google_url,
-            interval=0.5
-        )
-
-        if not result.get(
-            "status"
-        ):
-
-            return None
-
-        decoded_url = result.get(
-            "decoded_url"
-        )
-
-        if not decoded_url:
-
-            return None
-
-        if is_google_news_url(
-            decoded_url
-        ):
-
-            return None
-
-        return decoded_url
-
-    except Exception as error:
-
-        print(
-            f"    Decoder error: {error}"
-        )
-
-        return None
-
-
-# ============================================================
-# SEARCH ONE QUERY
-# ============================================================
-
-def search_google_news(
-    query
-):
-
-    url = GOOGLE_NEWS_RSS.format(
-        query=quote(query)
+    url = (
+        "https://news.google.com/rss/search?"
+        f"q={requests.utils.quote(query)}"
+        "&hl=en-US"
+        "&gl=US"
+        "&ceid=US:en"
     )
 
     try:
-
-        response = SESSION.get(
+        response = requests.get(
             url,
-            timeout=12
+            headers=HEADERS,
+            timeout=REQUEST_TIMEOUT,
         )
 
         response.raise_for_status()
-
-    except Exception as error:
-
-        print(
-            f"    RSS error: {error}"
-        )
-
-        return []
-
-    try:
-
-        root = ET.fromstring(
-            response.content
-        )
-
-    except Exception as error:
-
-        print(
-            f"    XML error: {error}"
-        )
-
-        return []
-
-    results = []
-
-    for item in root.findall(
-        ".//item"
-    ):
-
-        title_node = item.find(
-            "title"
-        )
-
-        link_node = item.find(
-            "link"
-        )
-
-        description_node = (
-            item.find(
-                "description"
-            )
-        )
-
-        pubdate_node = (
-            item.find(
-                "pubDate"
-            )
-        )
-
-        source_node = (
-            item.find(
-                "source"
-            )
-        )
-
-        if (
-            title_node is None
-            or link_node is None
-        ):
-
-            continue
-
-        title = clean_text(
-            title_node.text
-        )
-
-        google_url = (
-            link_node.text
-            or ""
-        ).strip()
-
-        description = ""
-
-        if description_node is not None:
-
-            description = clean_text(
-                description_node.text
-            )
-
-        published = ""
-
-        if pubdate_node is not None:
-
-            published = clean_text(
-                pubdate_node.text
-            )
-
-        source_name = ""
-
-        if source_node is not None:
-
-            source_name = clean_text(
-                source_node.text
-            )
-
-        # ----------------------------------------------------
-        # Filter before decoding
-        # ----------------------------------------------------
-
-        combined = (
-            f"{title} "
-            f"{description}"
-        )
-
-        if contains_old_year(
-            combined
-        ):
-
-            continue
-
-        if not is_relevant(
-            title,
-            description
-        ):
-
-            continue
-
-        # ----------------------------------------------------
-        # Decode
-        # ----------------------------------------------------
-
-        original_url = (
-            decode_google_news_url(
-                google_url
-            )
-        )
-
-        if not original_url:
-
-            continue
-
-        if is_google_news_url(
-            original_url
-        ):
-
-            continue
-
-        if not valid_url(
-            original_url
-        ):
-
-            continue
-
-        results.append({
-
-            "source":
-                source_name
-                or "Google News",
-
-            "title":
-                title,
-
-            "url":
-                original_url,
-
-            "snippet":
-                description,
-
-            "published":
-                published
-
-        })
-
-    return results
-
-
-# ============================================================
-# VERIFY ONE PAGE
-# ============================================================
-
-def verify_page(
-    item
-):
-
-    url = item.get(
-        "url",
-        ""
-    )
-
-    if not url:
-
-        return None
-
-    if is_google_news_url(
-        url
-    ):
-
-        return None
-
-    try:
-
-        response = SESSION.get(
-            url,
-            timeout=10,
-            allow_redirects=True
-        )
-
-        response.raise_for_status()
-
-    except Exception as error:
-
-        print(
-            f"    Page error: "
-            f"{error}"
-        )
-
-        return None
-
-    final_url = response.url
-
-    if is_google_news_url(
-        final_url
-    ):
-
-        return None
-
-    if not valid_url(
-        final_url
-    ):
-
-        return None
-
-    item["url"] = final_url
-
-    try:
 
         soup = BeautifulSoup(
             response.text,
-            "html.parser"
+            "xml",
         )
 
-    except Exception:
+        results = []
 
-        return None
+        for item in soup.find_all("item")[:MAX_RESULTS_PER_QUERY]:
 
-    page_title = ""
-
-    if soup.title:
-
-        page_title = clean_text(
-            soup.title.get_text(
-                " ",
-                strip=True
-            )
-        )
-
-    page_text = clean_text(
-        soup.get_text(
-            " ",
-            strip=True
-        )
-    )
-
-    if len(page_text) < 250:
-
-        return None
-
-    # --------------------------------------------------------
-    # Check currentness
-    # --------------------------------------------------------
-
-    first_part = page_text[:6000]
-
-    if contains_old_year(
-        f"{page_title} {first_part}"
-    ):
-
-        return None
-
-    # --------------------------------------------------------
-    # Check opportunity
-    # --------------------------------------------------------
-
-    combined = (
-        f"{page_title} "
-        f"{first_part}"
-    ).lower()
-
-    opportunity_hits = sum(
-        keyword in combined
-        for keyword in OPPORTUNITY_KEYWORDS
-    )
-
-    field_hits = sum(
-        keyword in combined
-        for keyword in FIELD_KEYWORDS
-    )
-
-    if opportunity_hits == 0:
-
-        return None
-
-    if field_hits == 0:
-
-        return None
-
-    # --------------------------------------------------------
-    # Extract useful application clues
-    # --------------------------------------------------------
-
-    deadline_patterns = [
-        r"deadline.{0,100}",
-        r"apply by.{0,100}",
-        r"applications close.{0,100}",
-        r"application closes.{0,100}",
-        r"applications due.{0,100}",
-        r"submit by.{0,100}"
-    ]
-
-    deadline_hint = ""
-
-    for pattern in deadline_patterns:
-
-        match = re.search(
-            pattern,
-            combined,
-            flags=re.IGNORECASE
-        )
-
-        if match:
-
-            deadline_hint = (
-                match.group(0)[:200]
+            title = clean_text(
+                item.title.get_text()
+                if item.title
+                else ""
             )
 
-            break
-
-    # --------------------------------------------------------
-    # Store data
-    # --------------------------------------------------------
-
-    if page_title:
-
-        item["title"] = page_title
-
-    item["snippet"] = page_text[:5000]
-
-    item["deadline_hint"] = (
-        deadline_hint
-    )
-
-    # --------------------------------------------------------
-    # Find application links
-    # --------------------------------------------------------
-
-    application_links = []
-
-    for link in soup.find_all(
-        "a",
-        href=True
-    ):
-
-        link_text = clean_text(
-            link.get_text(
-                " ",
-                strip=True
-            )
-        ).lower()
-
-        href = link.get(
-            "href",
-            ""
-        )
-
-        if not href:
-
-            continue
-
-        if any(
-            word in link_text
-            for word in [
-                "apply",
-                "application",
-                "register",
-                "registration",
-                "submit"
-            ]
-        ):
-
-            application_links.append(
-                href
+            google_url = (
+                item.link.get_text(strip=True)
+                if item.link
+                else ""
             )
 
-    if application_links:
+            description = clean_text(
+                item.description.get_text()
+                if item.description
+                else ""
+            )
 
-        item["application_link"] = (
-            application_links[0]
-        )
+            published = clean_text(
+                item.pubDate.get_text()
+                if item.pubDate
+                else ""
+            )
 
-    return item
+            if not title or not google_url:
+                continue
+
+            results.append({
+                "title": title,
+                "google_url": google_url,
+                "description": description,
+                "published": published,
+            })
+
+        return results
+
+    except Exception as e:
+        print(f"Search failed: {query[:70]}... -> {e}")
+        return []
 
 
 # ============================================================
-# PARALLEL PAGE VERIFICATION
+# PARALLEL SEARCH
 # ============================================================
 
-def verify_pages(
-    candidates
-):
+def collect_google_news_results():
+    """
+    Run all Google News queries in parallel.
+    """
 
-    verified = []
+    all_results = []
 
-    if not candidates:
-
-        return verified
-
-    # Use multiple workers so slow websites
-    # don't block the entire run.
-
-    max_workers = 8
+    print(
+        f"Running {len(SEARCH_QUERIES)} searches "
+        f"with {SEARCH_WORKERS} workers..."
+    )
 
     with ThreadPoolExecutor(
-        max_workers=max_workers
+        max_workers=SEARCH_WORKERS
     ) as executor:
 
-        future_map = {
+        futures = {
             executor.submit(
-                verify_page,
-                item
-            ): item
-            for item in candidates
+                search_google_news,
+                query,
+            ): query
+            for query in SEARCH_QUERIES
         }
 
-        for future in as_completed(
-            future_map
-        ):
+        for future in as_completed(futures):
+
+            query = futures[future]
 
             try:
+                results = future.result()
 
+                print(
+                    f"  ✓ {len(results):2d} results | "
+                    f"{query[:65]}"
+                )
+
+                all_results.extend(results)
+
+            except Exception as e:
+                print(
+                    f"  ✗ Search error | "
+                    f"{query[:65]} | {e}"
+                )
+
+    return all_results
+
+
+# ============================================================
+# URL DECODING
+# ============================================================
+
+def decode_results(results):
+    """
+    Decode Google News URLs in parallel.
+    """
+
+    decoded = []
+
+    print(
+        f"\nDecoding {len(results)} Google News URLs..."
+    )
+
+    def decode_one(item):
+
+        publisher_url = decode_google_news_url(
+            item.get("google_url", "")
+        )
+
+        if not publisher_url:
+            return None
+
+        item = item.copy()
+        item["url"] = publisher_url
+
+        return item
+
+    with ThreadPoolExecutor(
+        max_workers=SEARCH_WORKERS
+    ) as executor:
+
+        futures = [
+            executor.submit(
+                decode_one,
+                item,
+            )
+            for item in results
+        ]
+
+        for future in as_completed(futures):
+
+            try:
                 result = future.result()
 
                 if result:
+                    decoded.append(result)
 
-                    verified.append(
-                        result
-                    )
+            except Exception:
+                pass
 
-            except Exception as error:
-
-                print(
-                    f"    Verification error: "
-                    f"{error}"
-                )
-
-    return verified
+    return decoded
 
 
 # ============================================================
 # DEDUPLICATION
 # ============================================================
 
-def deduplicate(
-    results
-):
+def deduplicate_results(results):
+
+    seen_urls = set()
+    seen_titles = set()
 
     unique = []
 
-    seen_urls = set()
-
-    seen_titles = set()
-
     for item in results:
 
-        url = (
-            item.get(
-                "url",
-                ""
-            )
-            .strip()
-            .lower()
+        url = normalize_url(
+            item.get("url", "")
         )
 
-        title = (
-            item.get(
-                "title",
-                ""
-            )
-            .strip()
-            .lower()
-        )
+        title = clean_text(
+            item.get("title", "")
+        ).lower()
 
-        if not url or not title:
-
+        if not url:
             continue
 
-        if is_google_news_url(
-            url
-        ):
-
+        if is_google_news_url(url):
             continue
 
-        normalized_title = re.sub(
+        if is_social_url(url):
+            continue
+
+        title_key = re.sub(
             r"[^a-z0-9]+",
-            " ",
-            title
-        ).strip()
+            "",
+            title,
+        )
 
         if url in seen_urls:
-
             continue
 
-        if normalized_title in seen_titles:
-
+        if title_key and title_key in seen_titles:
             continue
 
         seen_urls.add(url)
 
-        seen_titles.add(
-            normalized_title
-        )
+        if title_key:
+            seen_titles.add(title_key)
 
-        unique.append(
-            item
-        )
+        item["url"] = url
+
+        unique.append(item)
 
     return unique
 
 
 # ============================================================
-# FINAL CANDIDATE SELECTION
+# OPPORTUNITY SIGNALS
 # ============================================================
 
-def select_candidates(
-    candidates,
-    limit=20
-):
+STRONG_FIELD_TERMS = [
+    "oceanography",
+    "ocean science",
+    "ocean sciences",
+    "marine science",
+    "marine sciences",
+    "marine research",
+    "physical oceanography",
+    "coastal science",
+    "ocean modelling",
+    "ocean modeling",
+    "marine biology",
+    "fisheries",
+    "remote sensing",
+    "earth observation",
+    "geospatial",
+    "gis",
+    "geographic information",
+    "climate science",
+    "climate change",
+    "environmental science",
+    "environment",
+    "disaster risk",
+    "data science",
+]
 
-    def candidate_score(item):
 
-        text = (
-            f"{item.get('title', '')} "
-            f"{item.get('snippet', '')}"
-        ).lower()
+OPPORTUNITY_TERMS = [
+    "internship",
+    "intern",
+    "research",
+    "research assistant",
+    "scholarship",
+    "fellowship",
+    "summer school",
+    "winter school",
+    "training",
+    "hackathon",
+    "competition",
+    "program",
+    "programme",
+    "students",
+    "undergraduate",
+    "application",
+    "applications",
+    "apply",
+    "call for applications",
+]
 
-        score = 0
 
-        # Strong ocean relevance
-        for word in [
-            "oceanography",
-            "ocean science",
-            "marine science",
-            "marine research",
-            "physical oceanography"
-        ]:
+BAD_TERMS = [
+    "job vacancy",
+    "senior manager",
+    "director",
+    "chief",
+    "professor position",
+    "phd position",
+    "postdoctoral",
+    "postdoc",
+    "sales manager",
+    "marketing manager",
+    "software engineer",
+    "developer",
+    "accountant",
+    "lawyer",
+]
 
-            if word in text:
 
-                score += 10
+def text_signals(item):
 
-        # GIS / remote sensing
-        for word in [
-            "gis",
-            "remote sensing",
-            "earth observation",
-            "geospatial"
-        ]:
+    text = (
+        item.get("title", "")
+        + " "
+        + item.get("description", "")
+    ).lower()
 
-            if word in text:
-
-                score += 7
-
-        # Climate/environment
-        for word in [
-            "climate",
-            "environment",
-            "environmental"
-        ]:
-
-            if word in text:
-
-                score += 5
-
-        # Research
-        if (
-            "research" in text
-        ):
-
-            score += 5
-
-        # Application language
-        for word in [
-            "apply",
-            "applications open",
-            "call for applications"
-        ]:
-
-            if word in text:
-
-                score += 4
-
-        # Current year
-        if str(
-            CURRENT_YEAR
-        ) in text:
-
-            score += 10
-
-        # Deadline information
-        if item.get(
-            "deadline_hint"
-        ):
-
-            score += 5
-
-        # Application link
-        if item.get(
-            "application_link"
-        ):
-
-            score += 5
-
-        return score
-
-    candidates.sort(
-        key=candidate_score,
-        reverse=True
+    field_score = sum(
+        1
+        for term in STRONG_FIELD_TERMS
+        if term in text
     )
 
-    return candidates[:limit]
+    opportunity_score = sum(
+        1
+        for term in OPPORTUNITY_TERMS
+        if term in text
+    )
+
+    bad_score = sum(
+        1
+        for term in BAD_TERMS
+        if term in text
+    )
+
+    current_score = 0
+
+    if str(CURRENT_YEAR) in text:
+        current_score += 15
+
+    if str(NEXT_YEAR) in text:
+        current_score += 12
+
+    if "apply" in text:
+        current_score += 5
+
+    if "application" in text:
+        current_score += 5
+
+    return (
+        field_score,
+        opportunity_score,
+        bad_score,
+        current_score,
+    )
+
+
+# ============================================================
+# CANDIDATE PRE-RANKING
+# ============================================================
+
+def preliminary_score(item):
+
+    field_score, opportunity_score, bad_score, current_score = (
+        text_signals(item)
+    )
+
+    score = 0
+
+    # Strong subject relevance
+    score += min(field_score * 12, 48)
+
+    # Opportunity signal
+    score += min(opportunity_score * 6, 24)
+
+    # Current year / application signals
+    score += current_score
+
+    # Official source
+    score += domain_quality(
+        item.get("url", "")
+    )
+
+    # Penalize obvious irrelevant jobs
+    score -= bad_score * 20
+
+    # Penalize aggregators slightly
+    if is_aggregator(
+        item.get("url", "")
+    ):
+        score -= 8
+
+    return score
+
+
+def select_candidates(results):
+
+    scored = []
+
+    for item in results:
+
+        score = preliminary_score(item)
+
+        if score < 12:
+            continue
+
+        item = item.copy()
+        item["preliminary_score"] = score
+        item["domain"] = get_domain(
+            item.get("url", "")
+        )
+
+        scored.append(item)
+
+    scored.sort(
+        key=lambda x: x.get(
+            "preliminary_score",
+            0,
+        ),
+        reverse=True,
+    )
+
+    return scored[:MAX_VERIFY_CANDIDATES]
+
+
+# ============================================================
+# PAGE VERIFICATION
+# ============================================================
+
+def extract_page_data(url):
+
+    try:
+
+        response = requests.get(
+            url,
+            headers=HEADERS,
+            timeout=REQUEST_TIMEOUT,
+            allow_redirects=True,
+        )
+
+        if response.status_code >= 400:
+            return None
+
+        final_url = normalize_url(
+            response.url
+        )
+
+        if not final_url:
+            return None
+
+        html = response.text
+
+        soup = BeautifulSoup(
+            html,
+            "html.parser",
+        )
+
+        for tag in soup(
+            [
+                "script",
+                "style",
+                "noscript",
+                "svg",
+            ]
+        ):
+            tag.decompose()
+
+        title = clean_text(
+            soup.title.get_text()
+            if soup.title
+            else ""
+        )
+
+        body = clean_text(
+            soup.get_text(
+                " ",
+                strip=True,
+            )
+        )
+
+        if len(body) < 250:
+            return None
+
+        # Keep enough information for AI but avoid
+        # sending enormous pages.
+        body_excerpt = body[:10000]
+
+        application_links = []
+
+        for a in soup.find_all("a", href=True):
+
+            text = clean_text(
+                a.get_text(" ", strip=True)
+            ).lower()
+
+            href = a.get("href", "").strip()
+
+            if not href:
+                continue
+
+            absolute = urljoin(
+                final_url,
+                href,
+            )
+
+            if not absolute.startswith(
+                ("http://", "https://")
+            ):
+                continue
+
+            application_signal = any(
+                word in text
+                for word in [
+                    "apply",
+                    "application",
+                    "register",
+                    "registration",
+                    "apply now",
+                    "submit",
+                ]
+            )
+
+            if application_signal:
+                application_links.append(
+                    absolute
+                )
+
+        # Deduplicate links
+        application_links = list(
+            dict.fromkeys(
+                application_links
+            )
+        )[:5]
+
+        return {
+            "final_url": final_url,
+            "page_title": title,
+            "page_text": body_excerpt,
+            "application_links": application_links,
+        }
+
+    except Exception:
+        return None
+
+
+# ============================================================
+# DATE / EXPIRY SIGNALS
+# ============================================================
+
+MONTH_PATTERN = (
+    r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|"
+    r"apr(?:il)?|may|jun(?:e)?|jul(?:y)?|"
+    r"aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|"
+    r"nov(?:ember)?|dec(?:ember)?)"
+)
+
+
+def find_deadline_hints(text):
+
+    if not text:
+        return []
+
+    patterns = [
+        rf"{MONTH_PATTERN}\s+\d{{1,2}},?\s+\d{{4}}",
+        rf"\d{{1,2}}\s+{MONTH_PATTERN}\s+\d{{4}}",
+        r"\d{1,2}[/-]\d{1,2}[/-]20\d{2}",
+        r"deadline.{0,80}",
+        r"applications? close.{0,80}",
+        r"apply by.{0,80}",
+    ]
+
+    matches = []
+
+    for pattern in patterns:
+
+        try:
+            found = re.findall(
+                pattern,
+                text,
+                flags=re.IGNORECASE,
+            )
+
+            matches.extend(found)
+
+        except Exception:
+            pass
+
+    cleaned = []
+
+    for x in matches:
+
+        x = clean_text(x)
+
+        if x and x not in cleaned:
+            cleaned.append(x)
+
+    return cleaned[:10]
+
+
+def verify_page(item):
+
+    data = extract_page_data(
+        item.get("url", "")
+    )
+
+    if not data:
+        return None
+
+    combined_text = (
+        item.get("title", "")
+        + " "
+        + item.get("description", "")
+        + " "
+        + data.get("page_title", "")
+        + " "
+        + data.get("page_text", "")
+    ).lower()
+
+    field_score = sum(
+        1
+        for term in STRONG_FIELD_TERMS
+        if term in combined_text
+    )
+
+    opportunity_score = sum(
+        1
+        for term in OPPORTUNITY_TERMS
+        if term in combined_text
+    )
+
+    bad_score = sum(
+        1
+        for term in BAD_TERMS
+        if term in combined_text
+    )
+
+    # Reject pages with almost no opportunity relevance.
+    if opportunity_score == 0:
+        return None
+
+    # Reject pages that are obviously unrelated jobs.
+    if bad_score >= 2 and field_score == 0:
+        return None
+
+    # Require at least one strong field signal
+    # unless it is a broad scholarship/fellowship/youth opportunity.
+    broad_opportunity = any(
+        term in combined_text
+        for term in [
+            "scholarship",
+            "fellowship",
+            "youth program",
+            "student program",
+            "hackathon",
+            "competition",
+        ]
+    )
+
+    if field_score == 0 and not broad_opportunity:
+        return None
+
+    application_links = data.get(
+        "application_links",
+        [],
+    )
+
+    deadline_hints = find_deadline_hints(
+        combined_text
+    )
+
+    verified = item.copy()
+
+    verified["url"] = data.get(
+        "final_url",
+        item.get("url", ""),
+    )
+
+    verified["page_title"] = data.get(
+        "page_title",
+        "",
+    )
+
+    verified["page_text"] = data.get(
+        "page_text",
+        "",
+    )
+
+    verified["application_links"] = (
+        application_links
+    )
+
+    verified["deadline_hints"] = (
+        deadline_hints
+    )
+
+    verified["field_signal"] = field_score
+    verified["opportunity_signal"] = opportunity_score
+    verified["official_score"] = domain_quality(
+        verified["url"]
+    )
+
+    return verified
+
+
+# ============================================================
+# PARALLEL PAGE VERIFICATION
+# ============================================================
+
+def verify_pages(candidates):
+
+    verified = []
+
+    print(
+        f"\nVerifying {len(candidates)} candidate pages "
+        f"with {VERIFY_WORKERS} workers..."
+    )
+
+    with ThreadPoolExecutor(
+        max_workers=VERIFY_WORKERS
+    ) as executor:
+
+        futures = {
+            executor.submit(
+                verify_page,
+                item,
+            ): item
+            for item in candidates
+        }
+
+        for future in as_completed(futures):
+
+            try:
+                result = future.result()
+
+                if result:
+                    verified.append(result)
+
+            except Exception:
+                pass
+
+    verified.sort(
+        key=lambda x: (
+            x.get(
+                "official_score",
+                0,
+            ),
+            x.get(
+                "field_signal",
+                0,
+            ),
+            x.get(
+                "opportunity_signal",
+                0,
+            ),
+            x.get(
+                "preliminary_score",
+                0,
+            ),
+        ),
+        reverse=True,
+    )
+
+    return verified
+
+
+# ============================================================
+# FINAL PRE-AI SELECTION
+# ============================================================
+
+def prepare_for_ai(results):
+
+    final = []
+
+    seen = set()
+
+    for item in results:
+
+        url = item.get(
+            "url",
+            "",
+        )
+
+        if not url or url in seen:
+            continue
+
+        seen.add(url)
+
+        # Prefer candidates that have either:
+        # 1. strong field relevance
+        # 2. official domain
+        # 3. application link
+        # 4. clear current-year signal
+        text = (
+            item.get("title", "")
+            + " "
+            + item.get("description", "")
+            + " "
+            + item.get("page_text", "")
+        ).lower()
+
+        strong = (
+            item.get("field_signal", 0) >= 2
+            or item.get("official_score", 0) >= 30
+            or len(
+                item.get(
+                    "application_links",
+                    [],
+                )
+            ) > 0
+            or str(CURRENT_YEAR) in text
+            or str(NEXT_YEAR) in text
+        )
+
+        if not strong:
+            continue
+
+        # Aggregators are allowed only when they
+        # contain a real application link.
+        if is_aggregator(url):
+
+            if not item.get(
+                "application_links",
+                [],
+            ):
+                continue
+
+        final.append(item)
+
+    final.sort(
+        key=lambda x: (
+            len(
+                x.get(
+                    "application_links",
+                    [],
+                )
+            ) > 0,
+            x.get(
+                "official_score",
+                0,
+            ),
+            x.get(
+                "field_signal",
+                0,
+            ),
+            x.get(
+                "preliminary_score",
+                0,
+            ),
+        ),
+        reverse=True,
+    )
+
+    return final[:MAX_AI_CANDIDATES]
 
 
 # ============================================================
@@ -1019,164 +1141,164 @@ def select_candidates(
 
 def collect_opportunities():
 
-    print(
-        "\n=================================================="
-    )
+    start_time = time.time()
 
-    print(
-        "🌊 OCG OPPORTUNITY RADAR"
-    )
-
-    print(
-        "CURRENT YEAR:",
-        CURRENT_YEAR
-    )
-
-    print(
-        "=================================================="
-    )
-
-    all_results = []
+    print("\n" + "=" * 70)
+    print("🌊 OCG OPPORTUNITY RADAR - SOURCE COLLECTOR V4")
+    print("=" * 70)
 
     # --------------------------------------------------------
-    # SEARCH
+    # STEP 1: Google News discovery
     # --------------------------------------------------------
 
+    raw_results = collect_google_news_results()
+
     print(
-        "\n1. Searching Google News..."
+        f"\nRaw Google News results: "
+        f"{len(raw_results)}"
     )
 
-    for index, query in enumerate(
-        SEARCH_QUERIES,
-        start=1
-    ):
+    if not raw_results:
+        return []
 
-        print(
-            f"[{index}/{len(SEARCH_QUERIES)}] "
-            f"{query}"
-        )
+    # --------------------------------------------------------
+    # STEP 2: Decode publisher URLs
+    # --------------------------------------------------------
 
-        try:
-
-            results = search_google_news(
-                query
-            )
-
-            print(
-                f"    Candidates: "
-                f"{len(results)}"
-            )
-
-            all_results.extend(
-                results
-            )
-
-        except Exception as error:
-
-            print(
-                f"    Failed: {error}"
-            )
+    decoded_results = decode_results(
+        raw_results
+    )
 
     print(
-        f"\nRaw candidates: "
-        f"{len(all_results)}"
+        f"Decoded publisher URLs: "
+        f"{len(decoded_results)}"
     )
 
     # --------------------------------------------------------
-    # DEDUP
+    # STEP 3: Deduplicate
     # --------------------------------------------------------
 
-    all_results = deduplicate(
-        all_results
+    unique_results = deduplicate_results(
+        decoded_results
     )
 
     print(
-        f"After deduplication: "
-        f"{len(all_results)}"
+        f"Unique publisher pages: "
+        f"{len(unique_results)}"
     )
 
     # --------------------------------------------------------
-    # Keep only best 30 BEFORE verification
+    # STEP 4: Preliminary filtering
     # --------------------------------------------------------
 
     candidates = select_candidates(
-        all_results,
-        limit=30
+        unique_results
     )
 
     print(
-        f"Candidates selected for "
-        f"page verification: "
+        f"Preliminary candidates: "
         f"{len(candidates)}"
     )
 
     # --------------------------------------------------------
-    # VERIFY IN PARALLEL
+    # STEP 5: Verify actual pages
     # --------------------------------------------------------
-
-    print(
-        "\n2. Verifying publisher pages "
-        "in parallel..."
-    )
 
     verified = verify_pages(
         candidates
     )
 
-    verified = deduplicate(
+    print(
+        f"Verified opportunity pages: "
+        f"{len(verified)}"
+    )
+
+    # --------------------------------------------------------
+    # STEP 6: Final source-quality filter
+    # --------------------------------------------------------
+
+    final_candidates = prepare_for_ai(
         verified
     )
 
     print(
-        f"\nVerified candidates: "
-        f"{len(verified)}"
+        f"Candidates sent to AI: "
+        f"{len(final_candidates)}"
     )
 
     # --------------------------------------------------------
-    # Final selection
+    # Print candidates
     # --------------------------------------------------------
 
-    verified = select_candidates(
-        verified,
-        limit=20
-    )
+    print("\n" + "-" * 70)
+    print("FINAL SOURCE CANDIDATES")
+    print("-" * 70)
 
-    print(
-        f"Final candidates sent to AI: "
-        f"{len(verified)}"
-    )
-
-    # --------------------------------------------------------
-    # DEBUG
-    # --------------------------------------------------------
-
-    print(
-        "\nFINAL CANDIDATES:"
-    )
-
-    for index, item in enumerate(
-        verified,
-        start=1
+    for i, item in enumerate(
+        final_candidates,
+        start=1,
     ):
 
         print(
-            f"\n{index}. "
-            f"{item.get('title', '')}"
+            f"\n{i}. {item.get('title', '')}"
         )
 
         print(
-            f"   URL: "
-            f"{item.get('url', '')}"
+            f"   URL: {item.get('url', '')}"
         )
 
         print(
-            f"   Source: "
-            f"{item.get('source', '')}"
+            f"   Domain: {item.get('domain', get_domain(item.get('url', '')))}"
         )
 
         print(
-            f"   Deadline hint: "
-            f"{item.get('deadline_hint', 'None')}"
+            f"   Field signal: "
+            f"{item.get('field_signal', 0)}"
         )
 
-    return verified
+        print(
+            f"   Official score: "
+            f"{item.get('official_score', 0)}"
+        )
+
+        if item.get(
+            "deadline_hints"
+        ):
+            print(
+                f"   Deadline hints: "
+                f"{item.get('deadline_hints')[:3]}"
+            )
+
+        if item.get(
+            "application_links"
+        ):
+            print(
+                f"   Application link: "
+                f"{item.get('application_links')[0]}"
+            )
+
+    elapsed = time.time() - start_time
+
+    print("\n" + "=" * 70)
+
+    print(
+        f"Collection completed in "
+        f"{elapsed / 60:.2f} minutes"
+    )
+
+    print("=" * 70)
+
+    return final_candidates
+
+
+# ============================================================
+# DIRECT TEST
+# ============================================================
+
+if __name__ == "__main__":
+
+    results = collect_opportunities()
+
+    print(
+        f"\nReturned {len(results)} candidates."
+    )

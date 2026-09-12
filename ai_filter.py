@@ -12,7 +12,25 @@ API_KEY = os.environ["OPENROUTER_API_KEY"]
 
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-MODEL = "openrouter/free"
+# --------------------------------------------------------
+# MODEL SELECTION
+# --------------------------------------------------------
+# "openrouter/free" is an auto-router: it can silently hand
+# your request to a very weak model, which is why outputs
+# were duplicating fields across unrelated opportunities.
+#
+# Instead we pin to specific named free models and try them
+# in order, falling back to the next one if a call fails.
+# Free models on OpenRouter rotate over time, so if all of
+# these start failing, check https://openrouter.ai/models?max_price=0
+# and update this list.
+# --------------------------------------------------------
+
+MODEL_CANDIDATES = [
+    "deepseek/deepseek-chat-v3.1:free",
+    "qwen/qwen3-235b-a22b:free",
+    "meta-llama/llama-3.3-70b-instruct:free",
+]
 
 
 # ============================================================
@@ -844,83 +862,120 @@ def call_openrouter(prompt):
 
     }
 
-    payload = {
+    last_error = None
 
-        "model":
-            MODEL,
+    # ----------------------------------------------------
+    # Try each candidate model in order until one works.
+    # ----------------------------------------------------
 
-        "messages": [
+    for model_name in MODEL_CANDIDATES:
 
-            {
-                "role": "system",
-                "content":
-                    (
-                        "You are a strict opportunity "
-                        "verification and ranking system. "
-                        "Return valid JSON only. "
-                        "Never invent eligibility, "
-                        "deadlines, funding or facts."
-                    )
-            },
+        payload = {
 
-            {
-                "role": "user",
-                "content":
-                    prompt
-            }
+            "model":
+                model_name,
 
-        ],
+            "messages": [
 
-        "temperature": 0.1,
+                {
+                    "role": "system",
+                    "content":
+                        (
+                            "You are a strict opportunity "
+                            "verification and ranking system. "
+                            "Return valid JSON only. "
+                            "Never invent eligibility, "
+                            "deadlines, funding or facts. "
+                            "Each opportunity is independent: "
+                            "never reuse the funding, location, "
+                            "deadline or reason text from one "
+                            "opportunity for a different one."
+                        )
+                },
 
-        "max_tokens": 7000
+                {
+                    "role": "user",
+                    "content":
+                        prompt
+                }
 
-    }
+            ],
 
-    response = requests.post(
-        API_URL,
-        headers=headers,
-        json=payload,
-        timeout=120
-    )
+            "temperature": 0.1,
 
-    # --------------------------------------------------------
-    # HTTP error handling
-    # --------------------------------------------------------
+            "max_tokens": 7000
 
-    if not response.ok:
+        }
 
         try:
-            error_data = response.json()
 
-        except Exception:
-            error_data = response.text[:500]
+            response = requests.post(
+                API_URL,
+                headers=headers,
+                json=payload,
+                timeout=120
+            )
 
-        raise ValueError(
-            f"OpenRouter HTTP {response.status_code}: "
-            f"{error_data}"
-        )
+            if not response.ok:
 
-    # --------------------------------------------------------
-    # Parse JSON response
-    # --------------------------------------------------------
+                try:
+                    error_data = response.json()
 
-    try:
+                except Exception:
+                    error_data = response.text[:500]
 
-        data = response.json()
+                last_error = (
+                    f"OpenRouter HTTP "
+                    f"{response.status_code} "
+                    f"({model_name}): {error_data}"
+                )
 
-    except ValueError:
+                print(
+                    f"Model {model_name} failed: "
+                    f"{last_error}"
+                )
 
-        raise ValueError(
-            "OpenRouter did not return valid JSON."
-        )
+                continue
 
-    # --------------------------------------------------------
-    # Extract model response safely
-    # --------------------------------------------------------
+            try:
 
-    return extract_openrouter_content(
-        data
+                data = response.json()
+
+            except ValueError:
+
+                last_error = (
+                    f"OpenRouter did not return valid "
+                    f"JSON ({model_name})."
+                )
+
+                print(last_error)
+
+                continue
+
+            content = extract_openrouter_content(
+                data
+            )
+
+            print(
+                f"Used model: {model_name}"
+            )
+
+            return content
+
+        except Exception as error:
+
+            last_error = (
+                f"Request failed for {model_name}: "
+                f"{error}"
+            )
+
+            print(last_error)
+
+            continue
+
+    raise ValueError(
+        f"All candidate models failed. "
+        f"Last error: {last_error}"
     )
 
 
@@ -1020,7 +1075,142 @@ def rank_opportunities(
         len(clean_rankings)
     )
 
+    # --------------------------------------------------------
+    # RETRY: if the AI silently dropped some opportunities
+    # (returned fewer rankings than we sent), re-send just
+    # the missing ones once, as their own small batch.
+    # --------------------------------------------------------
+
+    covered_indices = {
+        ranking["index"]
+        for ranking in clean_rankings
+    }
+
+    missing_indices = [
+        i for i in range(1, len(batch) + 1)
+        if i not in covered_indices
+    ]
+
+    if missing_indices:
+
+        print(
+            f"Retrying {len(missing_indices)} "
+            f"dropped opportunity(ies): "
+            f"{missing_indices}"
+        )
+
+        missing_batch = [
+            batch[i - 1]
+            for i in missing_indices
+        ]
+
+        try:
+
+            retry_prompt = build_prompt(
+                missing_batch,
+                profile
+            )
+
+            retry_content = call_openrouter(
+                retry_prompt
+            )
+
+            retry_rankings = extract_json(
+                retry_content
+            )
+
+            if isinstance(retry_rankings, dict):
+                retry_rankings = [retry_rankings]
+
+            if isinstance(retry_rankings, list):
+
+                for ranking in retry_rankings:
+
+                    ranking = normalize_ranking(
+                        ranking
+                    )
+
+                    if ranking is None:
+                        continue
+
+                    local_index = ranking["index"]
+
+                    if (
+                        local_index < 1
+                        or local_index > len(missing_batch)
+                    ):
+                        continue
+
+                    # Map the retry batch's local index
+                    # back to the original batch's index.
+                    ranking["index"] = missing_indices[
+                        local_index - 1
+                    ]
+
+                    clean_rankings.append(
+                        ranking
+                    )
+
+            print(
+                "Valid AI rankings after retry:",
+                len(clean_rankings)
+            )
+
+        except Exception as error:
+
+            print(
+                f"Retry for dropped opportunities "
+                f"failed: {error}"
+            )
+
     return clean_rankings
+
+
+# ============================================================
+# CROSS-CHECK: does the AI's reason actually match this
+# opportunity, or was it copy-pasted from a different one?
+# ============================================================
+
+def reason_matches_opportunity(reason, opportunity):
+
+    title = str(
+        opportunity.get("title", "")
+    ).lower()
+
+    snippet = str(
+        opportunity.get("snippet", "")
+    ).lower()
+
+    reason_lower = str(reason).lower()
+
+    title_words = {
+        word for word in title.split()
+        if len(word) > 4
+    }
+
+    # No meaningful title words to check against -
+    # don't block it, there's nothing to compare.
+    if not title_words:
+        return True
+
+    reason_words = set(
+        reason_lower.split()
+    )
+
+    # Accept if the reason shares at least one
+    # meaningful word with the title, OR if a
+    # meaningful title word appears in the snippet
+    # (loose match - titles are often abbreviated).
+    if title_words & reason_words:
+        return True
+
+    if any(
+        word in snippet
+        for word in title_words
+    ):
+        return True
+
+    return False
 
 
 # ============================================================
@@ -1033,6 +1223,8 @@ def apply_rankings(
 ):
 
     final_results = []
+
+    skipped_mismatches = 0
 
     for ranking in rankings:
 
@@ -1064,6 +1256,34 @@ def apply_rankings(
                 index - 1
             ].copy()
         )
+
+        # ----------------------------------------------------
+        # Cross-check: reject rankings whose reason text
+        # doesn't relate to this opportunity's own title.
+        # This is what catches the AI copy-pasting details
+        # from one opportunity onto another.
+        # ----------------------------------------------------
+
+        reason_text = ranking.get(
+            "reason",
+            ""
+        )
+
+        if not reason_matches_opportunity(
+            reason_text,
+            opportunity
+        ):
+
+            skipped_mismatches += 1
+
+            print(
+                f"Skipped mismatched ranking for: "
+                f"{opportunity.get('title', '')} "
+                f"(reason looked copy-pasted from "
+                f"another opportunity)"
+            )
+
+            continue
 
         # ----------------------------------------------------
         # AI score
@@ -1151,5 +1371,12 @@ def apply_rankings(
         ),
         reverse=True
     )
+
+    if skipped_mismatches:
+
+        print(
+            f"Skipped {skipped_mismatches} ranking(s) "
+            f"due to copy-pasted/mismatched reason text."
+        )
 
     return final_results

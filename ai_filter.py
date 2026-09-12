@@ -847,10 +847,16 @@ def extract_openrouter_content(data):
 
 
 # ============================================================
-# CALL OPENROUTER
+# CALL A SINGLE MODEL
+# ============================================================
+# Makes one request to one specific model. Raises on any
+# failure (HTTP error, bad JSON envelope, empty content).
+# Does NOT try other models - that happens one level up in
+# get_rankings_for_batch, where we can also detect a model
+# that returned 200 OK but garbage/unparsable content.
 # ============================================================
 
-def call_openrouter(prompt):
+def call_single_model(model_name, prompt):
 
     headers = {
 
@@ -872,121 +878,183 @@ def call_openrouter(prompt):
 
     }
 
-    last_error = None
+    payload = {
 
-    # ----------------------------------------------------
-    # Try each candidate model in order until one works.
-    # ----------------------------------------------------
+        "model":
+            model_name,
+
+        "messages": [
+
+            {
+                "role": "system",
+                "content":
+                    (
+                        "You are a strict opportunity "
+                        "verification and ranking system. "
+                        "Return valid JSON only. Do not "
+                        "include any text, explanation or "
+                        "markdown before or after the JSON "
+                        "array. "
+                        "Never invent eligibility, "
+                        "deadlines, funding or facts. "
+                        "Each opportunity is independent: "
+                        "never reuse the funding, location, "
+                        "deadline or reason text from one "
+                        "opportunity for a different one."
+                    )
+            },
+
+            {
+                "role": "user",
+                "content":
+                    prompt
+            }
+
+        ],
+
+        "temperature": 0.1,
+
+        "max_tokens": 7000
+
+    }
+
+    response = requests.post(
+        API_URL,
+        headers=headers,
+        json=payload,
+        timeout=120
+    )
+
+    if not response.ok:
+
+        try:
+            error_data = response.json()
+
+        except Exception:
+            error_data = response.text[:500]
+
+        raise ValueError(
+            f"OpenRouter HTTP {response.status_code} "
+            f"({model_name}): {error_data}"
+        )
+
+    try:
+
+        data = response.json()
+
+    except ValueError:
+
+        raise ValueError(
+            f"OpenRouter did not return valid JSON "
+            f"({model_name})."
+        )
+
+    return extract_openrouter_content(
+        data
+    )
+
+
+# ============================================================
+# GET RANKINGS FOR A BATCH
+# ============================================================
+# Tries each candidate model in turn. A model only "counts"
+# as successful if its response actually parses into at
+# least one usable ranking - a 200 OK response containing
+# garbage/prose (like the "Could not find valid JSON" case)
+# is treated the same as a failure and we move on to the
+# next model, instead of losing the whole batch.
+# ============================================================
+
+def get_rankings_for_batch(batch, profile):
+
+    prompt = build_prompt(
+        batch,
+        profile
+    )
+
+    last_error = None
 
     for model_name in MODEL_CANDIDATES:
 
-        payload = {
-
-            "model":
-                model_name,
-
-            "messages": [
-
-                {
-                    "role": "system",
-                    "content":
-                        (
-                            "You are a strict opportunity "
-                            "verification and ranking system. "
-                            "Return valid JSON only. "
-                            "Never invent eligibility, "
-                            "deadlines, funding or facts. "
-                            "Each opportunity is independent: "
-                            "never reuse the funding, location, "
-                            "deadline or reason text from one "
-                            "opportunity for a different one."
-                        )
-                },
-
-                {
-                    "role": "user",
-                    "content":
-                        prompt
-                }
-
-            ],
-
-            "temperature": 0.1,
-
-            "max_tokens": 7000
-
-        }
-
         try:
 
-            response = requests.post(
-                API_URL,
-                headers=headers,
-                json=payload,
-                timeout=120
+            print(
+                f"Trying model: {model_name}"
             )
 
-            if not response.ok:
-
-                try:
-                    error_data = response.json()
-
-                except Exception:
-                    error_data = response.text[:500]
-
-                last_error = (
-                    f"OpenRouter HTTP "
-                    f"{response.status_code} "
-                    f"({model_name}): {error_data}"
-                )
-
-                print(
-                    f"Model {model_name} failed: "
-                    f"{last_error}"
-                )
-
-                continue
-
-            try:
-
-                data = response.json()
-
-            except ValueError:
-
-                last_error = (
-                    f"OpenRouter did not return valid "
-                    f"JSON ({model_name})."
-                )
-
-                print(last_error)
-
-                continue
-
-            content = extract_openrouter_content(
-                data
+            content = call_single_model(
+                model_name,
+                prompt
             )
 
             print(
-                f"Used model: {model_name}"
+                "AI response length:",
+                len(content)
             )
 
-            return content
+            rankings = extract_json(
+                content
+            )
+
+            if isinstance(rankings, dict):
+                rankings = [rankings]
+
+            if not isinstance(rankings, list):
+
+                raise ValueError(
+                    "AI response was not a JSON list."
+                )
+
+            clean_rankings = []
+
+            for ranking in rankings:
+
+                ranking = normalize_ranking(
+                    ranking
+                )
+
+                if ranking is None:
+                    continue
+
+                if (
+                    ranking["index"] < 1
+                    or ranking["index"] > len(batch)
+                ):
+                    continue
+
+                clean_rankings.append(
+                    ranking
+                )
+
+            if not clean_rankings:
+
+                raise ValueError(
+                    "Model returned no usable rankings."
+                )
+
+            print(
+                f"Used model: {model_name} "
+                f"({len(clean_rankings)} valid rankings)"
+            )
+
+            return clean_rankings
 
         except Exception as error:
 
-            last_error = (
-                f"Request failed for {model_name}: "
-                f"{error}"
-            )
+            last_error = error
 
-            print(last_error)
+            print(
+                f"Model {model_name} failed: {error}"
+            )
 
             continue
 
-    raise ValueError(
-        f"All candidate models failed. "
+    print(
+        f"All candidate models failed for this batch. "
         f"Last error: {last_error}"
     )
+
+    return []
 
 
 # ============================================================
@@ -1004,81 +1072,14 @@ def rank_opportunities(
     # Maximum 20 opportunities per request
     batch = opportunities[:20]
 
-    prompt = build_prompt(
-        batch,
-        profile
-    )
-
     print(
         "Sending opportunities to OpenRouter..."
     )
 
-    content = call_openrouter(
-        prompt
+    clean_rankings = get_rankings_for_batch(
+        batch,
+        profile
     )
-
-    print(
-        "OpenRouter response received."
-    )
-
-    # Helpful debug information without exposing
-    # the actual response or API key.
-    print(
-        "AI response length:",
-        len(content)
-    )
-
-    rankings = extract_json(
-        content
-    )
-
-    # --------------------------------------------------------
-    # AI should return a list
-    # --------------------------------------------------------
-
-    if isinstance(
-        rankings,
-        dict
-    ):
-
-        rankings = [
-            rankings
-        ]
-
-    if not isinstance(
-        rankings,
-        list
-    ):
-
-        raise ValueError(
-            "AI response was not a JSON list."
-        )
-
-    # --------------------------------------------------------
-    # Normalize rankings
-    # --------------------------------------------------------
-
-    clean_rankings = []
-
-    for ranking in rankings:
-
-        ranking = normalize_ranking(
-            ranking
-        )
-
-        if ranking is None:
-            continue
-
-        # Local batch index validation
-        if (
-            ranking["index"] < 1
-            or ranking["index"] > len(batch)
-        ):
-            continue
-
-        clean_rankings.append(
-            ranking
-        )
 
     print(
         "Valid AI rankings:",
@@ -1088,7 +1089,8 @@ def rank_opportunities(
     # --------------------------------------------------------
     # RETRY: if the AI silently dropped some opportunities
     # (returned fewer rankings than we sent), re-send just
-    # the missing ones once, as their own small batch.
+    # the missing ones once, as their own small batch - again
+    # trying all candidate models for that retry.
     # --------------------------------------------------------
 
     covered_indices = {
@@ -1114,64 +1116,29 @@ def rank_opportunities(
             for i in missing_indices
         ]
 
-        try:
+        retry_rankings = get_rankings_for_batch(
+            missing_batch,
+            profile
+        )
 
-            retry_prompt = build_prompt(
-                missing_batch,
-                profile
+        for ranking in retry_rankings:
+
+            local_index = ranking["index"]
+
+            # Map the retry batch's local index back to
+            # the original batch's index.
+            ranking["index"] = missing_indices[
+                local_index - 1
+            ]
+
+            clean_rankings.append(
+                ranking
             )
 
-            retry_content = call_openrouter(
-                retry_prompt
-            )
-
-            retry_rankings = extract_json(
-                retry_content
-            )
-
-            if isinstance(retry_rankings, dict):
-                retry_rankings = [retry_rankings]
-
-            if isinstance(retry_rankings, list):
-
-                for ranking in retry_rankings:
-
-                    ranking = normalize_ranking(
-                        ranking
-                    )
-
-                    if ranking is None:
-                        continue
-
-                    local_index = ranking["index"]
-
-                    if (
-                        local_index < 1
-                        or local_index > len(missing_batch)
-                    ):
-                        continue
-
-                    # Map the retry batch's local index
-                    # back to the original batch's index.
-                    ranking["index"] = missing_indices[
-                        local_index - 1
-                    ]
-
-                    clean_rankings.append(
-                        ranking
-                    )
-
-            print(
-                "Valid AI rankings after retry:",
-                len(clean_rankings)
-            )
-
-        except Exception as error:
-
-            print(
-                f"Retry for dropped opportunities "
-                f"failed: {error}"
-            )
+        print(
+            "Valid AI rankings after retry:",
+            len(clean_rankings)
+        )
 
     return clean_rankings
 

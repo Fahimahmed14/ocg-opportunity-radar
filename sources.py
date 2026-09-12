@@ -5,20 +5,13 @@ import xml.etree.ElementTree as ET
 import re
 from datetime import datetime
 
+from googlenewsdecoder import gnewsdecoder
 
-# ============================================================
-# CURRENT YEAR
-# ============================================================
 
 CURRENT_YEAR = datetime.now().year
 
 
-# ============================================================
-# SEARCH QUERIES
-# ============================================================
-
 SEARCH_QUERIES = [
-
     "oceanography internship undergraduate 2026",
     "marine science internship undergraduate 2026",
     "ocean science research internship 2026",
@@ -45,15 +38,12 @@ SEARCH_QUERIES = [
     "undergraduate research opportunity international students 2026",
     "student scholarship international students 2026",
     "student fellowship international students 2026",
+
     "student competition 2026",
     "student hackathon 2026",
     "youth climate program 2026"
 ]
 
-
-# ============================================================
-# GOOGLE NEWS RSS
-# ============================================================
 
 GOOGLE_NEWS_RSS = (
     "https://news.google.com/rss/search?"
@@ -64,12 +54,7 @@ GOOGLE_NEWS_RSS = (
 )
 
 
-# ============================================================
-# KEYWORDS
-# ============================================================
-
 OPPORTUNITY_KEYWORDS = [
-
     "internship",
     "intern",
     "research internship",
@@ -100,7 +85,6 @@ OPPORTUNITY_KEYWORDS = [
 
 
 FIELD_KEYWORDS = [
-
     "ocean",
     "oceanography",
     "marine",
@@ -125,45 +109,36 @@ FIELD_KEYWORDS = [
     "atmospheric",
     "hydrology",
     "disaster",
+    "risk",
     "sustainability",
     "conservation"
 ]
 
 
-# ============================================================
-# BLOCKED DOMAINS
-# ============================================================
-
 BLOCKED_DOMAINS = {
-
     "facebook.com",
     "instagram.com",
     "linkedin.com",
     "youtube.com",
     "twitter.com",
-    "x.com"
+    "x.com",
+    "news.google.com"
 }
 
-
-# ============================================================
-# SESSION
-# ============================================================
 
 SESSION = requests.Session()
 
 SESSION.headers.update({
-
     "User-Agent":
         "Mozilla/5.0 "
         "(Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 "
         "Chrome/131.0 Safari/537.36"
-
 })
 
 
 # ============================================================
-# CLEAN TEXT
+# TEXT CLEANING
 # ============================================================
 
 def clean_text(text):
@@ -233,7 +208,34 @@ def valid_url(url):
 
 
 # ============================================================
-# OLD YEAR DETECTION
+# GOOGLE NEWS URL CHECK
+# ============================================================
+
+def is_google_news_url(url):
+
+    if not url:
+        return False
+
+    try:
+
+        domain = urlparse(
+            url
+        ).netloc.lower()
+
+        return (
+            domain == "news.google.com"
+            or domain.endswith(
+                ".news.google.com"
+            )
+        )
+
+    except Exception:
+
+        return False
+
+
+# ============================================================
+# OLD YEAR CHECK
 # ============================================================
 
 def contains_old_year(text):
@@ -250,15 +252,15 @@ def contains_old_year(text):
 
         year = int(year)
 
-        # Reject clearly old opportunities
         if year < CURRENT_YEAR - 1:
+
             return True
 
     return False
 
 
 # ============================================================
-# OPPORTUNITY RELEVANCE
+# RELEVANCE CHECK
 # ============================================================
 
 def is_relevant(
@@ -267,7 +269,8 @@ def is_relevant(
 ):
 
     text = (
-        f"{title} {description}"
+        f"{title} "
+        f"{description}"
     ).lower()
 
     opportunity_hits = sum(
@@ -281,63 +284,83 @@ def is_relevant(
     )
 
     if opportunity_hits >= 2:
+
         return True
 
     if (
         opportunity_hits >= 1
         and field_hits >= 1
     ):
+
         return True
 
     return False
 
 
 # ============================================================
-# RESOLVE GOOGLE NEWS URL
+# DECODE GOOGLE NEWS URL
 # ============================================================
 
-def resolve_url(url):
+def decode_google_news_url(
+    google_url
+):
 
-    if not url:
-        return None
-
-    # Already a normal URL
-    if not url.startswith(
-        "https://news.google.com"
+    if not is_google_news_url(
+        google_url
     ):
 
-        return url
+        return google_url
 
     try:
 
-        response = SESSION.get(
-            url,
-            timeout=20,
-            allow_redirects=True
+        result = gnewsdecoder(
+            google_url,
+            interval=1
         )
 
-        final_url = response.url
-
-        if (
-            final_url
-            and not final_url.startswith(
-                "https://news.google.com"
-            )
+        if not result.get(
+            "status"
         ):
 
-            return final_url
+            print(
+                "    Google URL decode failed"
+            )
 
-    except Exception:
-        pass
+            return None
 
-    return url
+        decoded_url = result.get(
+            "decoded_url"
+        )
+
+        if not decoded_url:
+
+            return None
+
+        if is_google_news_url(
+            decoded_url
+        ):
+
+            return None
+
+        return decoded_url
+
+    except Exception as error:
+
+        print(
+            f"    Google decoder error: "
+            f"{error}"
+        )
+
+        return None
 
 
 # ============================================================
 # SEARCH GOOGLE NEWS
 # ============================================================
 
-def search_google_news(query):
+def search_google_news(
+    query
+):
 
     url = GOOGLE_NEWS_RSS.format(
         query=quote(query)
@@ -388,25 +411,36 @@ def search_google_news(query):
             "link"
         )
 
-        description_node = item.find(
-            "description"
+        description_node = (
+            item.find(
+                "description"
+            )
         )
 
-        pubdate_node = item.find(
-            "pubDate"
+        pubdate_node = (
+            item.find(
+                "pubDate"
+            )
+        )
+
+        source_node = (
+            item.find(
+                "source"
+            )
         )
 
         if (
             title_node is None
             or link_node is None
         ):
+
             continue
 
         title = clean_text(
             title_node.text
         )
 
-        news_url = (
+        google_url = (
             link_node.text
             or ""
         ).strip()
@@ -419,16 +453,24 @@ def search_google_news(query):
                 description_node.text
             )
 
-        pub_date = ""
+        published = ""
 
         if pubdate_node is not None:
 
-            pub_date = clean_text(
+            published = clean_text(
                 pubdate_node.text
             )
 
+        source_name = ""
+
+        if source_node is not None:
+
+            source_name = clean_text(
+                source_node.text
+            )
+
         # ----------------------------------------------------
-        # Reject old articles
+        # Basic filtering
         # ----------------------------------------------------
 
         if contains_old_year(
@@ -436,10 +478,6 @@ def search_google_news(query):
         ):
 
             continue
-
-        # ----------------------------------------------------
-        # Relevance filter
-        # ----------------------------------------------------
 
         if not is_relevant(
             title,
@@ -449,12 +487,40 @@ def search_google_news(query):
             continue
 
         # ----------------------------------------------------
-        # Resolve publisher URL
+        # Decode Google News URL
         # ----------------------------------------------------
 
-        original_url = resolve_url(
-            news_url
+        print(
+            f"    Decoding: {title[:80]}"
         )
+
+        original_url = (
+            decode_google_news_url(
+                google_url
+            )
+        )
+
+        # VERY IMPORTANT:
+        # Never send Google URLs forward.
+        if not original_url:
+
+            print(
+                "    Rejected: "
+                "could not resolve publisher URL"
+            )
+
+            continue
+
+        if is_google_news_url(
+            original_url
+        ):
+
+            print(
+                "    Rejected: "
+                "still a Google News URL"
+            )
+
+            continue
 
         if not valid_url(
             original_url
@@ -462,14 +528,11 @@ def search_google_news(query):
 
             continue
 
-        # If Google didn't redirect,
-        # keep it for now. It will be
-        # resolved later if possible.
-
         results.append({
 
             "source":
-                "Google News",
+                source_name
+                or "Google News",
 
             "title":
                 title,
@@ -481,7 +544,7 @@ def search_google_news(query):
                 description,
 
             "published":
-                pub_date
+                published
 
         })
 
@@ -489,10 +552,12 @@ def search_google_news(query):
 
 
 # ============================================================
-# VERIFY ORIGINAL PAGE
+# VERIFY REAL ARTICLE PAGE
 # ============================================================
 
-def verify_page(item):
+def verify_page(
+    item
+):
 
     url = item.get(
         "url",
@@ -500,6 +565,17 @@ def verify_page(item):
     )
 
     if not url:
+
+        return None
+
+    # --------------------------------------------------------
+    # Safety check
+    # --------------------------------------------------------
+
+    if is_google_news_url(
+        url
+    ):
+
         return None
 
     try:
@@ -512,23 +588,33 @@ def verify_page(item):
 
         response.raise_for_status()
 
-    except Exception:
+    except Exception as error:
 
-        return item
+        print(
+            f"    Page error: {error}"
+        )
+
+        return None
 
     final_url = response.url
 
     # --------------------------------------------------------
-    # Update URL to final destination
+    # Reject if redirect ended at Google
     # --------------------------------------------------------
 
-    if valid_url(final_url):
+    if is_google_news_url(
+        final_url
+    ):
 
-        item["url"] = final_url
+        return None
 
-    # --------------------------------------------------------
-    # Extract page information
-    # --------------------------------------------------------
+    if not valid_url(
+        final_url
+    ):
+
+        return None
+
+    item["url"] = final_url
 
     try:
 
@@ -539,14 +625,7 @@ def verify_page(item):
 
     except Exception:
 
-        return item
-
-    page_text = clean_text(
-        soup.get_text(
-            " ",
-            strip=True
-        )
-    )
+        return None
 
     page_title = ""
 
@@ -559,18 +638,73 @@ def verify_page(item):
             )
         )
 
+    page_text = clean_text(
+        soup.get_text(
+            " ",
+            strip=True
+        )
+    )
+
     # --------------------------------------------------------
-    # Reject clearly old pages
+    # Reject empty pages
     # --------------------------------------------------------
 
-    if contains_old_year(
-        f"{page_title} {page_text[:5000]}"
-    ):
+    if len(page_text) < 200:
+
+        print(
+            "    Rejected: page too short"
+        )
 
         return None
 
     # --------------------------------------------------------
-    # Use page title if better
+    # Reject clearly old pages
+    # --------------------------------------------------------
+
+    first_part = page_text[:7000]
+
+    if contains_old_year(
+        f"{page_title} {first_part}"
+    ):
+
+        print(
+            "    Rejected: old opportunity"
+        )
+
+        return None
+
+    # --------------------------------------------------------
+    # Make sure actual opportunity exists
+    # --------------------------------------------------------
+
+    combined_text = (
+        f"{page_title} "
+        f"{first_part}"
+    ).lower()
+
+    opportunity_hits = sum(
+        keyword in combined_text
+        for keyword in OPPORTUNITY_KEYWORDS
+    )
+
+    field_hits = sum(
+        keyword in combined_text
+        for keyword in FIELD_KEYWORDS
+    )
+
+    if (
+        opportunity_hits == 0
+        or field_hits == 0
+    ):
+
+        print(
+            "    Rejected: weak opportunity relevance"
+        )
+
+        return None
+
+    # --------------------------------------------------------
+    # Update title
     # --------------------------------------------------------
 
     if page_title:
@@ -578,14 +712,10 @@ def verify_page(item):
         item["title"] = page_title
 
     # --------------------------------------------------------
-    # Add actual page text
+    # Store real page content
     # --------------------------------------------------------
 
-    if page_text:
-
-        item["snippet"] = (
-            page_text[:2500]
-        )
+    item["snippet"] = page_text[:5000]
 
     return item
 
@@ -594,11 +724,14 @@ def verify_page(item):
 # DEDUPLICATION
 # ============================================================
 
-def deduplicate(results):
+def deduplicate(
+    results
+):
 
     unique = []
 
     seen_urls = set()
+
     seen_titles = set()
 
     for item in results:
@@ -622,6 +755,13 @@ def deduplicate(results):
         )
 
         if not url or not title:
+
+            continue
+
+        if is_google_news_url(
+            url
+        ):
+
             continue
 
         normalized_title = re.sub(
@@ -631,17 +771,22 @@ def deduplicate(results):
         ).strip()
 
         if url in seen_urls:
+
             continue
 
         if normalized_title in seen_titles:
+
             continue
 
         seen_urls.add(url)
+
         seen_titles.add(
             normalized_title
         )
 
-        unique.append(item)
+        unique.append(
+            item
+        )
 
     return unique
 
@@ -653,8 +798,7 @@ def deduplicate(results):
 def collect_opportunities():
 
     print(
-        "\n"
-        "=================================================="
+        "\n=================================================="
     )
 
     print(
@@ -697,7 +841,7 @@ def collect_opportunities():
             )
 
             print(
-                f"    Candidates: "
+                f"    Real candidates: "
                 f"{len(results)}"
             )
 
@@ -716,31 +860,24 @@ def collect_opportunities():
         f"{len(all_results)}"
     )
 
-    # --------------------------------------------------------
-    # DEDUPLICATE BEFORE FETCHING
-    # --------------------------------------------------------
-
     all_results = deduplicate(
         all_results
     )
 
     print(
-        f"After first deduplication: "
+        f"After deduplication: "
         f"{len(all_results)}"
     )
 
     # --------------------------------------------------------
-    # VERIFY PAGES
+    # VERIFY
     # --------------------------------------------------------
 
     print(
-        "\n2. Verifying opportunity pages..."
+        "\n2. Verifying publisher pages..."
     )
 
     verified = []
-
-    # Verify only first 40 to avoid
-    # excessive requests.
 
     for index, item in enumerate(
         all_results[:40],
@@ -748,7 +885,7 @@ def collect_opportunities():
     ):
 
         print(
-            f"Checking "
+            f"\nChecking "
             f"{index}/{min(40, len(all_results))}: "
             f"{item.get('title', '')}"
         )
@@ -763,10 +900,6 @@ def collect_opportunities():
                 verified_item
             )
 
-    # --------------------------------------------------------
-    # FINAL DEDUPLICATION
-    # --------------------------------------------------------
-
     verified = deduplicate(
         verified
     )
@@ -776,27 +909,14 @@ def collect_opportunities():
         f"{len(verified)}"
     )
 
-    # --------------------------------------------------------
-    # SEND TO AI
-    # --------------------------------------------------------
-
     verified = verified[:40]
 
     print(
-        f"Final candidates sent to AI: "
-        f"{len(verified)}"
-    )
-
-    # --------------------------------------------------------
-    # DEBUG
-    # --------------------------------------------------------
-
-    print(
-        "\nFIRST VERIFIED CANDIDATES:"
+        "\nFINAL CANDIDATES SENT TO AI:"
     )
 
     for index, item in enumerate(
-        verified[:10],
+        verified,
         start=1
     ):
 

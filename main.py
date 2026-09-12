@@ -438,7 +438,9 @@ def main():
 
     all_rankings = []
 
-    batch_size = 20
+    # Smaller batches reduce the chance of the AI mixing up
+    # or copy-pasting details between different opportunities.
+    batch_size = 10
 
     for start in range(
         0,

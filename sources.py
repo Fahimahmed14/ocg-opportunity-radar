@@ -4,24 +4,28 @@ from urllib.parse import quote, urlparse
 import xml.etree.ElementTree as ET
 import re
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from googlenewsdecoder import gnewsdecoder
 
 
 CURRENT_YEAR = datetime.now().year
 
+# ============================================================
+# SEARCH QUERIES
+# ============================================================
 
 SEARCH_QUERIES = [
     "oceanography internship undergraduate 2026",
     "marine science internship undergraduate 2026",
-    "ocean science research internship 2026",
+    "ocean research internship 2026",
     "oceanography summer school 2026",
     "marine science summer school 2026",
 
     "GIS internship undergraduate 2026",
+    "GIS summer school 2026",
     "remote sensing internship students 2026",
     "earth observation internship 2026",
-    "GIS summer school 2026",
 
     "climate change internship undergraduate 2026",
     "climate research internship 2026",
@@ -30,12 +34,11 @@ SEARCH_QUERIES = [
 
     "environmental science internship 2026",
     "environment research internship 2026",
-    "environmental fellowship students 2026",
 
     "data science internship undergraduate 2026",
     "data science competition students 2026",
 
-    "undergraduate research opportunity international students 2026",
+    "undergraduate research international students 2026",
     "student scholarship international students 2026",
     "student fellowship international students 2026",
 
@@ -53,6 +56,10 @@ GOOGLE_NEWS_RSS = (
     "&ceid=US:en"
 )
 
+
+# ============================================================
+# KEYWORDS
+# ============================================================
 
 OPPORTUNITY_KEYWORDS = [
     "internship",
@@ -80,7 +87,8 @@ OPPORTUNITY_KEYWORDS = [
     "youth program",
     "call for applications",
     "applications open",
-    "apply now"
+    "apply now",
+    "apply"
 ]
 
 
@@ -115,6 +123,10 @@ FIELD_KEYWORDS = [
 ]
 
 
+# ============================================================
+# BLOCKED DOMAINS
+# ============================================================
+
 BLOCKED_DOMAINS = {
     "facebook.com",
     "instagram.com",
@@ -122,9 +134,14 @@ BLOCKED_DOMAINS = {
     "youtube.com",
     "twitter.com",
     "x.com",
-    "news.google.com"
+    "news.google.com",
+    "google.com"
 }
 
+
+# ============================================================
+# SESSION
+# ============================================================
 
 SESSION = requests.Session()
 
@@ -198,6 +215,7 @@ def valid_url(url):
                     "." + blocked
                 )
             ):
+
                 return False
 
         return True
@@ -235,7 +253,7 @@ def is_google_news_url(url):
 
 
 # ============================================================
-# OLD YEAR CHECK
+# OLD YEAR DETECTION
 # ============================================================
 
 def contains_old_year(text):
@@ -252,6 +270,9 @@ def contains_old_year(text):
 
         year = int(year)
 
+        # Reject opportunities clearly older
+        # than the previous cycle.
+
         if year < CURRENT_YEAR - 1:
 
             return True
@@ -260,7 +281,7 @@ def contains_old_year(text):
 
 
 # ============================================================
-# RELEVANCE CHECK
+# RELEVANCE
 # ============================================================
 
 def is_relevant(
@@ -283,7 +304,9 @@ def is_relevant(
         for keyword in FIELD_KEYWORDS
     )
 
-    if opportunity_hits >= 2:
+    if (
+        opportunity_hits >= 2
+    ):
 
         return True
 
@@ -315,16 +338,12 @@ def decode_google_news_url(
 
         result = gnewsdecoder(
             google_url,
-            interval=1
+            interval=0.5
         )
 
         if not result.get(
             "status"
         ):
-
-            print(
-                "    Google URL decode failed"
-            )
 
             return None
 
@@ -347,15 +366,14 @@ def decode_google_news_url(
     except Exception as error:
 
         print(
-            f"    Google decoder error: "
-            f"{error}"
+            f"    Decoder error: {error}"
         )
 
         return None
 
 
 # ============================================================
-# SEARCH GOOGLE NEWS
+# SEARCH ONE QUERY
 # ============================================================
 
 def search_google_news(
@@ -370,7 +388,7 @@ def search_google_news(
 
         response = SESSION.get(
             url,
-            timeout=30
+            timeout=12
         )
 
         response.raise_for_status()
@@ -470,11 +488,16 @@ def search_google_news(
             )
 
         # ----------------------------------------------------
-        # Basic filtering
+        # Filter before decoding
         # ----------------------------------------------------
 
+        combined = (
+            f"{title} "
+            f"{description}"
+        )
+
         if contains_old_year(
-            f"{title} {description}"
+            combined
         ):
 
             continue
@@ -487,12 +510,8 @@ def search_google_news(
             continue
 
         # ----------------------------------------------------
-        # Decode Google News URL
+        # Decode
         # ----------------------------------------------------
-
-        print(
-            f"    Decoding: {title[:80]}"
-        )
 
         original_url = (
             decode_google_news_url(
@@ -500,25 +519,13 @@ def search_google_news(
             )
         )
 
-        # VERY IMPORTANT:
-        # Never send Google URLs forward.
         if not original_url:
-
-            print(
-                "    Rejected: "
-                "could not resolve publisher URL"
-            )
 
             continue
 
         if is_google_news_url(
             original_url
         ):
-
-            print(
-                "    Rejected: "
-                "still a Google News URL"
-            )
 
             continue
 
@@ -552,7 +559,7 @@ def search_google_news(
 
 
 # ============================================================
-# VERIFY REAL ARTICLE PAGE
+# VERIFY ONE PAGE
 # ============================================================
 
 def verify_page(
@@ -568,10 +575,6 @@ def verify_page(
 
         return None
 
-    # --------------------------------------------------------
-    # Safety check
-    # --------------------------------------------------------
-
     if is_google_news_url(
         url
     ):
@@ -582,7 +585,7 @@ def verify_page(
 
         response = SESSION.get(
             url,
-            timeout=25,
+            timeout=10,
             allow_redirects=True
         )
 
@@ -591,16 +594,13 @@ def verify_page(
     except Exception as error:
 
         print(
-            f"    Page error: {error}"
+            f"    Page error: "
+            f"{error}"
         )
 
         return None
 
     final_url = response.url
-
-    # --------------------------------------------------------
-    # Reject if redirect ended at Google
-    # --------------------------------------------------------
 
     if is_google_news_url(
         final_url
@@ -645,79 +645,198 @@ def verify_page(
         )
     )
 
-    # --------------------------------------------------------
-    # Reject empty pages
-    # --------------------------------------------------------
-
-    if len(page_text) < 200:
-
-        print(
-            "    Rejected: page too short"
-        )
+    if len(page_text) < 250:
 
         return None
 
     # --------------------------------------------------------
-    # Reject clearly old pages
+    # Check currentness
     # --------------------------------------------------------
 
-    first_part = page_text[:7000]
+    first_part = page_text[:6000]
 
     if contains_old_year(
         f"{page_title} {first_part}"
     ):
 
-        print(
-            "    Rejected: old opportunity"
-        )
-
         return None
 
     # --------------------------------------------------------
-    # Make sure actual opportunity exists
+    # Check opportunity
     # --------------------------------------------------------
 
-    combined_text = (
+    combined = (
         f"{page_title} "
         f"{first_part}"
     ).lower()
 
     opportunity_hits = sum(
-        keyword in combined_text
+        keyword in combined
         for keyword in OPPORTUNITY_KEYWORDS
     )
 
     field_hits = sum(
-        keyword in combined_text
+        keyword in combined
         for keyword in FIELD_KEYWORDS
     )
 
-    if (
-        opportunity_hits == 0
-        or field_hits == 0
-    ):
+    if opportunity_hits == 0:
 
-        print(
-            "    Rejected: weak opportunity relevance"
-        )
+        return None
+
+    if field_hits == 0:
 
         return None
 
     # --------------------------------------------------------
-    # Update title
+    # Extract useful application clues
+    # --------------------------------------------------------
+
+    deadline_patterns = [
+        r"deadline.{0,100}",
+        r"apply by.{0,100}",
+        r"applications close.{0,100}",
+        r"application closes.{0,100}",
+        r"applications due.{0,100}",
+        r"submit by.{0,100}"
+    ]
+
+    deadline_hint = ""
+
+    for pattern in deadline_patterns:
+
+        match = re.search(
+            pattern,
+            combined,
+            flags=re.IGNORECASE
+        )
+
+        if match:
+
+            deadline_hint = (
+                match.group(0)[:200]
+            )
+
+            break
+
+    # --------------------------------------------------------
+    # Store data
     # --------------------------------------------------------
 
     if page_title:
 
         item["title"] = page_title
 
-    # --------------------------------------------------------
-    # Store real page content
-    # --------------------------------------------------------
-
     item["snippet"] = page_text[:5000]
 
+    item["deadline_hint"] = (
+        deadline_hint
+    )
+
+    # --------------------------------------------------------
+    # Find application links
+    # --------------------------------------------------------
+
+    application_links = []
+
+    for link in soup.find_all(
+        "a",
+        href=True
+    ):
+
+        link_text = clean_text(
+            link.get_text(
+                " ",
+                strip=True
+            )
+        ).lower()
+
+        href = link.get(
+            "href",
+            ""
+        )
+
+        if not href:
+
+            continue
+
+        if any(
+            word in link_text
+            for word in [
+                "apply",
+                "application",
+                "register",
+                "registration",
+                "submit"
+            ]
+        ):
+
+            application_links.append(
+                href
+            )
+
+    if application_links:
+
+        item["application_link"] = (
+            application_links[0]
+        )
+
     return item
+
+
+# ============================================================
+# PARALLEL PAGE VERIFICATION
+# ============================================================
+
+def verify_pages(
+    candidates
+):
+
+    verified = []
+
+    if not candidates:
+
+        return verified
+
+    # Use multiple workers so slow websites
+    # don't block the entire run.
+
+    max_workers = 8
+
+    with ThreadPoolExecutor(
+        max_workers=max_workers
+    ) as executor:
+
+        future_map = {
+            executor.submit(
+                verify_page,
+                item
+            ): item
+            for item in candidates
+        }
+
+        for future in as_completed(
+            future_map
+        ):
+
+            try:
+
+                result = future.result()
+
+                if result:
+
+                    verified.append(
+                        result
+                    )
+
+            except Exception as error:
+
+                print(
+                    f"    Verification error: "
+                    f"{error}"
+                )
+
+    return verified
 
 
 # ============================================================
@@ -792,6 +911,109 @@ def deduplicate(
 
 
 # ============================================================
+# FINAL CANDIDATE SELECTION
+# ============================================================
+
+def select_candidates(
+    candidates,
+    limit=20
+):
+
+    def candidate_score(item):
+
+        text = (
+            f"{item.get('title', '')} "
+            f"{item.get('snippet', '')}"
+        ).lower()
+
+        score = 0
+
+        # Strong ocean relevance
+        for word in [
+            "oceanography",
+            "ocean science",
+            "marine science",
+            "marine research",
+            "physical oceanography"
+        ]:
+
+            if word in text:
+
+                score += 10
+
+        # GIS / remote sensing
+        for word in [
+            "gis",
+            "remote sensing",
+            "earth observation",
+            "geospatial"
+        ]:
+
+            if word in text:
+
+                score += 7
+
+        # Climate/environment
+        for word in [
+            "climate",
+            "environment",
+            "environmental"
+        ]:
+
+            if word in text:
+
+                score += 5
+
+        # Research
+        if (
+            "research" in text
+        ):
+
+            score += 5
+
+        # Application language
+        for word in [
+            "apply",
+            "applications open",
+            "call for applications"
+        ]:
+
+            if word in text:
+
+                score += 4
+
+        # Current year
+        if str(
+            CURRENT_YEAR
+        ) in text:
+
+            score += 10
+
+        # Deadline information
+        if item.get(
+            "deadline_hint"
+        ):
+
+            score += 5
+
+        # Application link
+        if item.get(
+            "application_link"
+        ):
+
+            score += 5
+
+        return score
+
+    candidates.sort(
+        key=candidate_score,
+        reverse=True
+    )
+
+    return candidates[:limit]
+
+
+# ============================================================
 # MAIN COLLECTOR
 # ============================================================
 
@@ -821,7 +1043,7 @@ def collect_opportunities():
     # --------------------------------------------------------
 
     print(
-        "\n1. Searching opportunity feeds..."
+        "\n1. Searching Google News..."
     )
 
     for index, query in enumerate(
@@ -841,7 +1063,7 @@ def collect_opportunities():
             )
 
             print(
-                f"    Real candidates: "
+                f"    Candidates: "
                 f"{len(results)}"
             )
 
@@ -860,6 +1082,10 @@ def collect_opportunities():
         f"{len(all_results)}"
     )
 
+    # --------------------------------------------------------
+    # DEDUP
+    # --------------------------------------------------------
+
     all_results = deduplicate(
         all_results
     )
@@ -870,35 +1096,32 @@ def collect_opportunities():
     )
 
     # --------------------------------------------------------
-    # VERIFY
+    # Keep only best 30 BEFORE verification
+    # --------------------------------------------------------
+
+    candidates = select_candidates(
+        all_results,
+        limit=30
+    )
+
+    print(
+        f"Candidates selected for "
+        f"page verification: "
+        f"{len(candidates)}"
+    )
+
+    # --------------------------------------------------------
+    # VERIFY IN PARALLEL
     # --------------------------------------------------------
 
     print(
-        "\n2. Verifying publisher pages..."
+        "\n2. Verifying publisher pages "
+        "in parallel..."
     )
 
-    verified = []
-
-    for index, item in enumerate(
-        all_results[:40],
-        start=1
-    ):
-
-        print(
-            f"\nChecking "
-            f"{index}/{min(40, len(all_results))}: "
-            f"{item.get('title', '')}"
-        )
-
-        verified_item = verify_page(
-            item
-        )
-
-        if verified_item:
-
-            verified.append(
-                verified_item
-            )
+    verified = verify_pages(
+        candidates
+    )
 
     verified = deduplicate(
         verified
@@ -909,10 +1132,26 @@ def collect_opportunities():
         f"{len(verified)}"
     )
 
-    verified = verified[:40]
+    # --------------------------------------------------------
+    # Final selection
+    # --------------------------------------------------------
+
+    verified = select_candidates(
+        verified,
+        limit=20
+    )
 
     print(
-        "\nFINAL CANDIDATES SENT TO AI:"
+        f"Final candidates sent to AI: "
+        f"{len(verified)}"
+    )
+
+    # --------------------------------------------------------
+    # DEBUG
+    # --------------------------------------------------------
+
+    print(
+        "\nFINAL CANDIDATES:"
     )
 
     for index, item in enumerate(
@@ -933,6 +1172,11 @@ def collect_opportunities():
         print(
             f"   Source: "
             f"{item.get('source', '')}"
+        )
+
+        print(
+            f"   Deadline hint: "
+            f"{item.get('deadline_hint', 'None')}"
         )
 
     return verified

@@ -10,10 +10,20 @@ from ai_filter import (
 )
 
 
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 
 CHAT_ID = "6289716583"
 
+MIN_SCORE = 70
+
+
+# ============================================================
+# TELEGRAM
+# ============================================================
 
 def send_telegram(message):
 
@@ -34,15 +44,21 @@ def send_telegram(message):
     response.raise_for_status()
 
 
+# ============================================================
+# SPLIT TELEGRAM MESSAGE
+# ============================================================
+
 def split_message(
     message,
     max_length=4000
 ):
 
     if len(message) <= max_length:
+
         return [message]
 
     parts = []
+
     current = ""
 
     for line in message.split("\n"):
@@ -55,34 +71,133 @@ def split_message(
         ):
 
             if current:
-                parts.append(current)
+
+                parts.append(
+                    current
+                )
 
             current = line
 
         else:
 
             if current:
+
                 current += "\n"
 
             current += line
 
     if current:
-        parts.append(current)
+
+        parts.append(
+            current
+        )
 
     return parts
 
 
-def build_report(
-    results,
-    profile
+# ============================================================
+# FINAL QUALITY FILTER
+# ============================================================
+
+def final_filter(
+    results
 ):
 
-    # --------------------------------------------------------
-    # Keep anything with an AI score
-    # --------------------------------------------------------
+    accepted = []
 
-    results = sorted(
-        results,
+    rejected = []
+
+    for opportunity in results:
+
+        score = opportunity.get(
+            "score",
+            0
+        )
+
+        try:
+
+            score = int(
+                float(score)
+            )
+
+        except (
+            ValueError,
+            TypeError
+        ):
+
+            score = 0
+
+        status = str(
+            opportunity.get(
+                "application_status",
+                "Unknown"
+            )
+        ).strip().lower()
+
+        eligibility = str(
+            opportunity.get(
+                "eligibility",
+                ""
+            )
+        ).strip().lower()
+
+        # ----------------------------------------------------
+        # Reject low scores
+        # ----------------------------------------------------
+
+        if score < MIN_SCORE:
+
+            rejected.append(
+                (
+                    opportunity,
+                    f"score below {MIN_SCORE}"
+                )
+            )
+
+            continue
+
+        # ----------------------------------------------------
+        # Reject closed opportunities
+        # ----------------------------------------------------
+
+        if status == "closed":
+
+            rejected.append(
+                (
+                    opportunity,
+                    "application closed"
+                )
+            )
+
+            continue
+
+        # ----------------------------------------------------
+        # Reject clearly ineligible opportunities
+        # ----------------------------------------------------
+
+        if (
+            "not eligible"
+            in eligibility
+        ):
+
+            rejected.append(
+                (
+                    opportunity,
+                    "student not eligible"
+                )
+            )
+
+            continue
+
+        # ----------------------------------------------------
+        # Accept
+        # ----------------------------------------------------
+
+        accepted.append(
+            opportunity
+        )
+
+    accepted.sort(
         key=lambda x: x.get(
             "score",
             0
@@ -90,26 +205,39 @@ def build_report(
         reverse=True
     )
 
-    top_results = results[:10]
+    return accepted, rejected
+
+
+# ============================================================
+# BUILD TELEGRAM REPORT
+# ============================================================
+
+def build_report(
+    results,
+    profile
+):
 
     message = (
         "🌊 OCG OPPORTUNITY RADAR\n\n"
-        "🔥 TOP OPPORTUNITIES\n\n"
+        "🔥 TOP CURRENT OPPORTUNITIES\n\n"
     )
 
-    if not top_results:
+    if not results:
 
         message += (
-            "No opportunities reached the "
-            "AI ranking stage.\n\n"
-            "The collector may have returned "
-            "zero usable candidates."
+            "No strong current opportunities "
+            "were found today.\n\n"
+            f"Minimum AI match score: "
+            f"{MIN_SCORE}/100\n\n"
+            "The radar automatically removed "
+            "low-match, closed and clearly "
+            "ineligible opportunities."
         )
 
         return message
 
     for number, opportunity in enumerate(
-        top_results,
+        results[:10],
         start=1
     ):
 
@@ -135,7 +263,7 @@ def build_report(
 
         eligibility = opportunity.get(
             "eligibility",
-            "Unknown"
+            "Eligibility unclear"
         )
 
         reason = opportunity.get(
@@ -143,9 +271,44 @@ def build_report(
             "No explanation provided."
         )
 
+        deadline = opportunity.get(
+            "deadline",
+            "Unknown"
+        )
+
+        funding = opportunity.get(
+            "funding",
+            "Unknown"
+        )
+
+        location = opportunity.get(
+            "location",
+            "Unknown"
+        )
+
+        status = opportunity.get(
+            "application_status",
+            "Unknown"
+        )
+
         url = opportunity.get(
             "url",
             ""
+        )
+
+        application_link = opportunity.get(
+            "application_link",
+            ""
+        )
+
+        # ----------------------------------------------------
+        # Prefer actual application link
+        # ----------------------------------------------------
+
+        final_link = (
+            application_link
+            if application_link
+            else url
         )
 
         message += (
@@ -153,15 +316,21 @@ def build_report(
             f"⭐ Match: {score}/100\n"
             f"📂 {category}\n"
             f"🎯 {priority}\n"
-            f"👤 {eligibility}\n"
+            f"📅 Deadline: {deadline}\n"
+            f"💰 Funding: {funding}\n"
+            f"🌍 Location: {location}\n"
+            f"📌 Status: {status}\n"
+            f"👤 Eligibility: {eligibility}\n"
             f"📝 {reason}\n"
-            f"🔗 {url}\n\n"
+            f"🔗 {final_link}\n\n"
         )
 
     message += (
         "──────────────────\n"
-        f"🔎 AI-ranked candidates: "
-        f"{len(results)}\n\n"
+        f"✅ Strong matches: "
+        f"{len(results)}\n"
+        f"🎯 Minimum score: "
+        f"{MIN_SCORE}/100\n\n"
         "🎓 Profile: "
         f"{profile['education']['degree']}\n"
         "🌍 Bangladesh"
@@ -170,15 +339,23 @@ def build_report(
     return message
 
 
+# ============================================================
+# MAIN
+# ============================================================
+
 def main():
 
-    print("=" * 60)
+    print(
+        "=" * 60
+    )
 
     print(
         "🌊 OCG OPPORTUNITY RADAR"
     )
 
-    print("=" * 60)
+    print(
+        "=" * 60
+    )
 
     # --------------------------------------------------------
     # LOAD PROFILE
@@ -190,7 +367,9 @@ def main():
         encoding="utf-8"
     ) as file:
 
-        profile = json.load(file)
+        profile = json.load(
+            file
+        )
 
     print(
         "\n1. Profile loaded."
@@ -222,36 +401,6 @@ def main():
     )
 
     # --------------------------------------------------------
-    # IMPORTANT DEBUG
-    # --------------------------------------------------------
-
-    if opportunities:
-
-        print(
-            "\nFIRST COLLECTED CANDIDATES:"
-        )
-
-        for index, opportunity in enumerate(
-            opportunities[:10],
-            start=1
-        ):
-
-            print(
-                f"\n{index}. "
-                f"{opportunity.get('title', '')}"
-            )
-
-            print(
-                f"   URL: "
-                f"{opportunity.get('url', '')}"
-            )
-
-            print(
-                f"   Source: "
-                f"{opportunity.get('source', '')}"
-            )
-
-    # --------------------------------------------------------
     # NO CANDIDATES
     # --------------------------------------------------------
 
@@ -259,10 +408,10 @@ def main():
 
         message = (
             "🌊 OCG OPPORTUNITY RADAR\n\n"
-            "⚠️ COLLECTOR RETURNED 0 CANDIDATES\n\n"
-            "The opportunity websites/search "
-            "sources returned no usable results.\n\n"
-            "AI filtering was NOT run."
+            "⚠️ NO CANDIDATES FOUND\n\n"
+            "The collector did not find "
+            "usable opportunity pages today.\n\n"
+            "AI filtering was not run."
         )
 
         send_telegram(
@@ -272,15 +421,15 @@ def main():
         return
 
     # --------------------------------------------------------
-    # LIMIT AI CANDIDATES
+    # LIMIT AI INPUT
     # --------------------------------------------------------
 
-    ai_candidates = opportunities[:40]
+    ai_candidates = opportunities[:20]
 
     print(
         f"\n3. Sending "
         f"{len(ai_candidates)} "
-        "candidates to OpenRouter AI..."
+        "candidates to OpenRouter..."
     )
 
     # --------------------------------------------------------
@@ -302,7 +451,8 @@ def main():
         ]
 
         batch_number = (
-            start // batch_size + 1
+            start // batch_size
+            + 1
         )
 
         print(
@@ -343,13 +493,11 @@ def main():
 
                     continue
 
-                if local_index < 1:
-                    continue
-
                 if (
-                    local_index
-                    > len(batch)
+                    local_index < 1
+                    or local_index > len(batch)
                 ):
+
                     continue
 
                 global_index = (
@@ -373,7 +521,7 @@ def main():
             )
 
     # --------------------------------------------------------
-    # APPLY AI RANKINGS
+    # APPLY RANKINGS
     # --------------------------------------------------------
 
     print(
@@ -389,36 +537,102 @@ def main():
     )
 
     print(
-        f"5. Final ranked results: "
+        f"5. AI-ranked results: "
         f"{len(ranked_results)}"
     )
 
     # --------------------------------------------------------
-    # PRINT SCORES
+    # SHOW ALL AI SCORES
     # --------------------------------------------------------
 
     print(
         "\nAI SCORES:"
     )
 
-    for result in ranked_results[:20]:
+    for result in ranked_results:
 
         print(
-            f"{result.get('score', 0)}/100 - "
+            f"{result.get('score', 0)}/100 | "
+            f"{result.get('application_status', 'Unknown')} | "
             f"{result.get('title', '')}"
         )
 
     # --------------------------------------------------------
-    # REPORT
+    # FINAL QUALITY FILTER
     # --------------------------------------------------------
 
-    report = build_report(
-        ranked_results,
-        profile
+    print(
+        "\n6. Applying final quality filter..."
+    )
+
+    accepted, rejected = (
+        final_filter(
+            ranked_results
+        )
     )
 
     print(
-        "\n6. Sending Telegram report..."
+        f"Accepted: "
+        f"{len(accepted)}"
+    )
+
+    print(
+        f"Rejected: "
+        f"{len(rejected)}"
+    )
+
+    # --------------------------------------------------------
+    # SHOW REJECTED
+    # --------------------------------------------------------
+
+    if rejected:
+
+        print(
+            "\nREJECTED:"
+        )
+
+        for opportunity, reason in rejected:
+
+            print(
+                f"- "
+                f"{opportunity.get('score', 0)}/100 "
+                f"{opportunity.get('title', '')} "
+                f"({reason})"
+            )
+
+    # --------------------------------------------------------
+    # SHOW ACCEPTED
+    # --------------------------------------------------------
+
+    if accepted:
+
+        print(
+            "\nACCEPTED:"
+        )
+
+        for opportunity in accepted:
+
+            print(
+                f"- "
+                f"{opportunity.get('score', 0)}/100 "
+                f"{opportunity.get('title', '')}"
+            )
+
+    # --------------------------------------------------------
+    # BUILD REPORT
+    # --------------------------------------------------------
+
+    report = build_report(
+        accepted,
+        profile
+    )
+
+    # --------------------------------------------------------
+    # SEND TELEGRAM
+    # --------------------------------------------------------
+
+    print(
+        "\n7. Sending Telegram report..."
     )
 
     messages = split_message(
@@ -440,6 +654,10 @@ def main():
         "\n✅ RADAR COMPLETED"
     )
 
+
+# ============================================================
+# RUN
+# ============================================================
 
 if __name__ == "__main__":
 

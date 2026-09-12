@@ -21,15 +21,25 @@ API_URL = "https://openrouter.ai/api/v1/chat/completions"
 #
 # Instead we pin to specific named free models and try them
 # in order, falling back to the next one if a call fails.
-# Free models on OpenRouter rotate over time, so if all of
-# these start failing, check https://openrouter.ai/models?max_price=0
-# and update this list.
+#
+# IMPORTANT: OpenRouter's free lineup rotates - models here
+# WILL eventually 404 like the previous list did. If a run's
+# log shows every candidate failing with 404 ("unavailable
+# for free"), refresh this list from the live collection:
+# https://openrouter.ai/collections/free-models
+# (copy the exact slug shown there, including the ":free" suffix)
+#
+# "openrouter/free" is kept as the final fallback so the
+# pipeline still gets SOME response even if every named
+# model above it has rotated out or is rate-limited.
 # --------------------------------------------------------
 
 MODEL_CANDIDATES = [
-    "deepseek/deepseek-chat-v3.1:free",
-    "qwen/qwen3-235b-a22b:free",
-    "meta-llama/llama-3.3-70b-instruct:free",
+    "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "thinkingmachines/inkling:free",
+    "nex-agi/nex-n2.5-pro:free",
+    "openrouter/free",
 ]
 
 

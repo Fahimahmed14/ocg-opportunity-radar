@@ -10,9 +10,7 @@ import re
 
 API_KEY = os.environ["OPENROUTER_API_KEY"]
 
-API_URL = (
-    "https://openrouter.ai/api/v1/chat/completions"
-)
+API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 MODEL = "openrouter/free"
 
@@ -26,26 +24,50 @@ def extract_json(text):
     Extract a JSON array or object from an AI response.
     """
 
-    if not text:
-        raise ValueError(
-            "AI returned an empty response."
-        )
+    if text is None:
+        raise ValueError("AI returned no usable text.")
 
-    text = text.strip()
+    # Handle non-string content
+    if isinstance(text, list):
+
+        parts = []
+
+        for item in text:
+
+            if isinstance(item, str):
+                parts.append(item)
+
+            elif isinstance(item, dict):
+
+                if "text" in item:
+                    parts.append(str(item["text"]))
+
+                elif "content" in item:
+                    parts.append(str(item["content"]))
+
+        text = "\n".join(parts)
+
+    if not text:
+        raise ValueError("AI returned an empty response.")
+
+    text = str(text).strip()
+
+    if not text:
+        raise ValueError("AI returned an empty response.")
 
     # --------------------------------------------------------
     # Remove markdown code fences
     # --------------------------------------------------------
 
     text = re.sub(
-        r"^```(?:json)?",
+        r"^```(?:json)?\s*",
         "",
         text,
         flags=re.IGNORECASE
     )
 
     text = re.sub(
-        r"```$",
+        r"\s*```$",
         "",
         text
     )
@@ -53,15 +75,13 @@ def extract_json(text):
     text = text.strip()
 
     # --------------------------------------------------------
-    # Try complete JSON directly
+    # Direct JSON
     # --------------------------------------------------------
 
     try:
-
         return json.loads(text)
 
     except json.JSONDecodeError:
-
         pass
 
     # --------------------------------------------------------
@@ -77,18 +97,12 @@ def extract_json(text):
         and end > start
     ):
 
-        candidate = text[
-            start:end + 1
-        ]
+        candidate = text[start:end + 1]
 
         try:
-
-            return json.loads(
-                candidate
-            )
+            return json.loads(candidate)
 
         except json.JSONDecodeError:
-
             pass
 
     # --------------------------------------------------------
@@ -104,23 +118,16 @@ def extract_json(text):
         and end > start
     ):
 
-        candidate = text[
-            start:end + 1
-        ]
+        candidate = text[start:end + 1]
 
         try:
-
-            return json.loads(
-                candidate
-            )
+            return json.loads(candidate)
 
         except json.JSONDecodeError:
-
             pass
 
     raise ValueError(
-        "Could not find valid JSON "
-        "in AI response."
+        "Could not find valid JSON in AI response."
     )
 
 
@@ -132,9 +139,7 @@ def normalize_score(value):
 
     try:
 
-        score = int(
-            float(value)
-        )
+        score = int(float(value))
 
     except (
         ValueError,
@@ -156,15 +161,9 @@ def normalize_score(value):
 # NORMALIZE RANKING
 # ============================================================
 
-def normalize_ranking(
-    ranking
-):
+def normalize_ranking(ranking):
 
-    if not isinstance(
-        ranking,
-        dict
-    ):
-
+    if not isinstance(ranking, dict):
         return None
 
     try:
@@ -184,17 +183,14 @@ def normalize_ranking(
         return None
 
     if index < 1:
-
         return None
 
     ranking["index"] = index
 
-    ranking["score"] = (
-        normalize_score(
-            ranking.get(
-                "score",
-                0
-            )
+    ranking["score"] = normalize_score(
+        ranking.get(
+            "score",
+            0
         )
     )
 
@@ -245,10 +241,6 @@ def normalize_ranking(
         or "No explanation provided."
     )
 
-    # --------------------------------------------------------
-    # Optional useful fields
-    # --------------------------------------------------------
-
     ranking["deadline"] = (
         str(
             ranking.get(
@@ -296,10 +288,7 @@ def normalize_ranking(
 # BUILD AI PROMPT
 # ============================================================
 
-def build_prompt(
-    opportunities,
-    profile
-):
+def build_prompt(opportunities, profile):
 
     opportunity_text = ""
 
@@ -409,40 +398,12 @@ Valid opportunities include:
 - Scientific program
 
 ==================================================
-VERY IMPORTANT: CURRENTNESS
+CURRENTNESS
 ==================================================
 
 The current year is 2026.
 
-You MUST distinguish between:
-
-1. A CURRENT opportunity
-2. An article discussing an opportunity
-3. An OLD opportunity
-4. An expired opportunity
-
-An article about an opportunity is NOT automatically
-a current opportunity.
-
-For example:
-
-"Applications Now Open for 2019 Scholarship"
-
-must be rejected.
-
-If the opportunity clearly belongs to:
-
-2019
-2020
-2021
-2022
-2023
-2024
-2025
-
-then it should normally receive a score below 20.
-
-Do NOT recommend clearly expired opportunities.
+Reject clearly expired or historical opportunities.
 
 Prefer:
 
@@ -450,40 +411,17 @@ Prefer:
 - 2027 opportunities
 - currently open applications
 - future deadlines
-- recurring programs whose 2026/2027 cycle is open
-- programs with no deadline but clearly active/current information
+- active recurring programs
 
-If the page does not provide enough information to
-determine whether an opportunity is current, do not
-invent a date.
+An article about an old opportunity is NOT a current
+opportunity.
 
-==================================================
-DEADLINE RULE
-==================================================
+If a deadline has clearly passed, score below 20.
 
-Look for:
-
-- Application deadline
-- Deadline
-- Applications close
-- Apply by
-- Closing date
-- Submission deadline
-
-If a deadline has clearly passed:
-
-score should normally be below 20.
-
-If the deadline is unknown:
-
-write:
-
-"Unknown"
-
-Never invent a deadline.
+Never invent dates.
 
 ==================================================
-ELIGIBILITY RULE
+ELIGIBILITY
 ==================================================
 
 The student is an undergraduate student from Bangladesh.
@@ -493,51 +431,30 @@ Strong eligibility signals include:
 - Undergraduate students
 - International students
 - Students worldwide
-- Students from developing countries
-- Students from Bangladesh
 - Open to all nationalities
+- Students from Bangladesh
 - Remote participation
 - International applicants
 
-Potentially eligible:
-
-"Students from all countries"
-
-Potentially eligible:
-
-"International students"
-
-Potentially eligible:
-
-"Undergraduate students"
-
-Potentially eligible:
-
-"Open globally"
-
 Potentially NOT eligible:
 
-"US citizens only"
+- US citizens only
+- US nationals only
+- Permanent residents only
+- EU citizens only
+- Canadian citizens only
 
-"US nationals only"
-
-"Permanent residents only"
-
-"EU citizens only"
-
-"Canadian citizens only"
-
-If eligibility is not available, write:
+If eligibility is unavailable:
 
 "Eligibility unclear"
 
-Do NOT invent eligibility.
+Never invent eligibility.
 
 ==================================================
 FIELD RELEVANCE
 ==================================================
 
-Highest priority should be given to:
+Highest priority:
 
 1. Oceanography
 2. Ocean science
@@ -557,7 +474,7 @@ Highest priority should be given to:
 16. Data science
 17. Scientific programming
 
-Also consider related fields such as:
+Also consider:
 
 - Earth science
 - Atmospheric science
@@ -569,7 +486,7 @@ Also consider related fields such as:
 - Scientific computing
 
 ==================================================
-ACTUAL OPPORTUNITY RULE
+ACTUAL OPPORTUNITY
 ==================================================
 
 The page should represent something a student can
@@ -578,12 +495,10 @@ actually apply for, participate in, attend, or use.
 Reject:
 
 - General news
-- News articles with no active opportunity
 - Opinion articles
-- Blog posts
+- Blog posts with no active opportunity
 - University homepages
 - Organization homepages
-- Company homepages
 - Product pages
 - Search-result pages
 - Google pages
@@ -591,97 +506,53 @@ Reject:
 - Login pages
 - Privacy pages
 - Contact pages
-- Generic career pages with no specific program
-- General information with no opportunity
+- Generic career pages
 - Historical announcements
 - Expired programs
 
-==================================================
-NEWS ARTICLE RULE
-==================================================
-
-A news article can only be recommended if the article
-clearly describes a CURRENT opportunity.
-
-For example:
-
-"University announces 2026 ocean research internship
-applications"
-
-may be valid.
-
-But:
-
-"Students participated in 2022 ocean internship"
-
-is NOT valid.
+A news article is valid ONLY when it clearly describes
+a CURRENT opportunity.
 
 ==================================================
 MATCH SCORE
 ==================================================
 
-Score from 0 to 100.
-
 90-100:
 Excellent match.
-
-The opportunity is current, undergraduate-friendly,
-strongly related to oceanography/GIS/climate/environment/
-research/data science, and the student is likely eligible.
 
 80-89:
 Very strong match.
 
-Strong subject relevance and likely eligibility.
-
 70-79:
 Strong match.
-
-Useful and reasonably relevant.
 
 60-69:
 Possible useful match.
 
-Relevant but some uncertainty exists.
-
 40-59:
 Weak match.
-
-Some relevance but important eligibility,
-currentness, location or field uncertainty.
 
 20-39:
 Very weak.
 
-Only limited relevance or significant uncertainty.
-
 0-19:
 Reject.
 
-Examples:
-
-- Expired opportunity
-- Old opportunity
-- Clearly ineligible
-- General article
-- No actual opportunity
-- Completely unrelated
+Expired, historical, clearly ineligible or unrelated
+opportunities should normally score below 20.
 
 ==================================================
 PRIORITY
 ==================================================
 
 HIGH:
-
-Score 80-100
+80-100
 
 MEDIUM:
-
-Score 60-79
+60-79
 
 LOW:
-
-Score below 60
+Below 60
 
 ==================================================
 CATEGORY
@@ -732,7 +603,7 @@ Never invent funding.
 LOCATION
 ==================================================
 
-Extract the location if clearly stated.
+Extract only if clearly stated.
 
 Examples:
 
@@ -759,26 +630,12 @@ Upcoming
 Closed
 Unknown
 
-Do not call something Open unless the information
-supports it.
-
 ==================================================
 REASON
 ==================================================
 
-Give a short reason explaining:
-
-- Why it matches the student's background
-- Important subject relevance
-- Important eligibility issue if any
-
-Keep it concise.
-
-Example:
-
-"Strong oceanography research match and suitable for
-undergraduate students, but international eligibility
-needs verification."
+Give a short explanation of why the opportunity matches
+the student's background.
 
 ==================================================
 RETURN FORMAT
@@ -788,9 +645,9 @@ Return ONLY valid JSON.
 
 Return a JSON array.
 
-Every opportunity MUST have an item.
+Every opportunity must have an item.
 
-Use this exact structure:
+Use this structure:
 
 [
   {{
@@ -808,7 +665,6 @@ Use this exact structure:
 ]
 
 Do not use markdown.
-
 Do not write explanations outside JSON.
 
 ==================================================
@@ -822,12 +678,151 @@ OPPORTUNITIES TO EVALUATE
 
 
 # ============================================================
+# EXTRACT OPENROUTER CONTENT
+# ============================================================
+
+def extract_openrouter_content(data):
+
+    if not isinstance(data, dict):
+        raise ValueError(
+            "OpenRouter returned an invalid JSON object."
+        )
+
+    choices = data.get("choices")
+
+    if not choices:
+        error_info = data.get("error")
+
+        if error_info:
+            raise ValueError(
+                f"OpenRouter API error: {error_info}"
+            )
+
+        raise ValueError(
+            "OpenRouter returned no choices."
+        )
+
+    choice = choices[0]
+
+    if not isinstance(choice, dict):
+        raise ValueError(
+            "OpenRouter returned an invalid choice."
+        )
+
+    message = choice.get("message", {})
+
+    if not isinstance(message, dict):
+        message = {}
+
+    # --------------------------------------------------------
+    # Normal response
+    # --------------------------------------------------------
+
+    content = message.get("content")
+
+    if content:
+
+        if isinstance(content, str):
+            return content
+
+        if isinstance(content, list):
+
+            parts = []
+
+            for item in content:
+
+                if isinstance(item, str):
+                    parts.append(item)
+
+                elif isinstance(item, dict):
+
+                    if item.get("text"):
+                        parts.append(
+                            str(item["text"])
+                        )
+
+                    elif item.get("content"):
+                        parts.append(
+                            str(item["content"])
+                        )
+
+            combined = "\n".join(parts).strip()
+
+            if combined:
+                return combined
+
+    # --------------------------------------------------------
+    # Some reasoning models may place useful output
+    # in a reasoning field.
+    # --------------------------------------------------------
+
+    reasoning = message.get("reasoning")
+
+    if reasoning:
+
+        if isinstance(reasoning, str):
+            return reasoning
+
+        if isinstance(reasoning, list):
+
+            parts = []
+
+            for item in reasoning:
+
+                if isinstance(item, str):
+                    parts.append(item)
+
+                elif isinstance(item, dict):
+
+                    if item.get("text"):
+                        parts.append(
+                            str(item["text"])
+                        )
+
+            combined = "\n".join(parts).strip()
+
+            if combined:
+                return combined
+
+    # --------------------------------------------------------
+    # Safe debugging information.
+    # Do NOT print the API key.
+    # --------------------------------------------------------
+
+    print(
+        "OpenRouter returned no usable message content."
+    )
+
+    print(
+        "Choice keys:",
+        list(choice.keys())
+    )
+
+    print(
+        "Message keys:",
+        list(message.keys())
+    )
+
+    print(
+        "Finish reason:",
+        choice.get("finish_reason")
+    )
+
+    print(
+        "Response ID:",
+        data.get("id", "Unknown")
+    )
+
+    raise ValueError(
+        "AI returned an empty response."
+    )
+
+
+# ============================================================
 # CALL OPENROUTER
 # ============================================================
 
-def call_openrouter(
-    prompt
-):
+def call_openrouter(prompt):
 
     headers = {
 
@@ -876,11 +871,9 @@ def call_openrouter(
 
         ],
 
-        "temperature":
-            0.1,
+        "temperature": 0.1,
 
-        "max_tokens":
-            7000
+        "max_tokens": 7000
 
     }
 
@@ -891,30 +884,44 @@ def call_openrouter(
         timeout=120
     )
 
-    response.raise_for_status()
+    # --------------------------------------------------------
+    # HTTP error handling
+    # --------------------------------------------------------
 
-    data = response.json()
+    if not response.ok:
+
+        try:
+            error_data = response.json()
+
+        except Exception:
+            error_data = response.text[:500]
+
+        raise ValueError(
+            f"OpenRouter HTTP {response.status_code}: "
+            f"{error_data}"
+        )
+
+    # --------------------------------------------------------
+    # Parse JSON response
+    # --------------------------------------------------------
 
     try:
 
-        content = (
-            data["choices"][0]
-            ["message"]
-            ["content"]
-        )
+        data = response.json()
 
-    except (
-        KeyError,
-        IndexError,
-        TypeError
-    ) as error:
+    except ValueError:
 
         raise ValueError(
-            f"Unexpected OpenRouter response: "
-            f"{error}"
+            "OpenRouter did not return valid JSON."
         )
 
-    return content
+    # --------------------------------------------------------
+    # Extract model response safely
+    # --------------------------------------------------------
+
+    return extract_openrouter_content(
+        data
+    )
 
 
 # ============================================================
@@ -927,13 +934,9 @@ def rank_opportunities(
 ):
 
     if not opportunities:
-
         return []
 
-    # --------------------------------------------------------
     # Maximum 20 opportunities per request
-    # --------------------------------------------------------
-
     batch = opportunities[:20]
 
     prompt = build_prompt(
@@ -942,8 +945,7 @@ def rank_opportunities(
     )
 
     print(
-        "Sending opportunities to "
-        "OpenRouter..."
+        "Sending opportunities to OpenRouter..."
     )
 
     content = call_openrouter(
@@ -952,6 +954,13 @@ def rank_opportunities(
 
     print(
         "OpenRouter response received."
+    )
+
+    # Helpful debug information without exposing
+    # the actual response or API key.
+    print(
+        "AI response length:",
+        len(content)
     )
 
     rankings = extract_json(
@@ -1006,6 +1015,11 @@ def rank_opportunities(
             ranking
         )
 
+    print(
+        "Valid AI rankings:",
+        len(clean_rankings)
+    )
+
     return clean_rankings
 
 
@@ -1055,14 +1069,12 @@ def apply_rankings(
         # AI score
         # ----------------------------------------------------
 
-        score = normalize_score(
+        opportunity["score"] = normalize_score(
             ranking.get(
                 "score",
                 0
             )
         )
-
-        opportunity["score"] = score
 
         # ----------------------------------------------------
         # AI fields
